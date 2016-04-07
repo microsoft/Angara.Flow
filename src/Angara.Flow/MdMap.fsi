@@ -1,42 +1,34 @@
 ﻿namespace Angara.Data
 
-type MdKey<'key when 'key : comparison> = 'key list
+[<Sealed;Class>]
+type MdMap<'k, 'v when 'k : comparison> =
+    member IsScalar: bool
+    member AsScalar: unit -> 'v option    
+    static member Empty : MdMap<'k,'v>
 
-[<RequireQualifiedAccess>]
-type MdMap<'key, 'value when 'key : comparison> = 
-    | Value of 'value
-    | Map of Map<'key, MdMap<'key, 'value>>
-
-[<RequireQualifiedAccess>]
+[<RequireQualifiedAccessAttribute>]
 module MdMap =
-    // Basic    
-    val tryFind : MdKey<'key> -> MdMap<'key,'value> -> MdMap<'key,'value> option
-    val add : MdKey<'key> -> MdMap<'key,'value> -> MdMap<'key,'value> -> MdMap<'key,'value>
-    /// If value of the md-map for the given key is `Map`, returns `Some` of the number of elements of that map;
-    /// otherwise, if it is `Value` or there is not value for the given key, returns `None`.
-    val tryCount : MdKey<'key> -> MdMap<'key,'value> -> int option
-    
-    val isValue : MdMap<_,_> -> bool
-    val value : MdMap<_,'value> -> 'value
-
-    /// Views the collection as an enumerable sequence of pairs
-    /// consisting of key and corresponding item. 
+    val empty<'k, 'v when 'k : comparison> : MdMap<'k,'v>
+    val scalar: 'v -> MdMap<_,'v>
+    val set: 'k list -> MdMap<'k,'v> -> MdMap<'k,'v> -> MdMap<'k,'v>
+    /// Leave mdmap elements whose keys start with the mdkey and cut off the start of their keys.
+    /// Returns None if there are no such keys in the mdmap.
+    /// For an empty key returns the mdmap intact.
+    val tryGet : mdkey:'k list -> mdmap:MdMap<'k,'v> -> MdMap<'k,'v> option
+    /// Returns a sequence of keys and mdmaps contained in the given mdmap, if it is not scalar.
+    /// If the given MdMap is scalar or empty, returns an empty sequence.
+    val toShallowSeq : MdMap<'k,'v> -> ('k*MdMap<'k,'v>) seq
+    /// Views the collection as an enumerable sequence of scalars
+    /// contained in the given mdmap with their keys.
     /// The sequence will be ordered by the keys of the map at each dimension.
-    val toSeq : MdMap<'key,'value> -> (MdKey<'key> * 'value) seq
-
+    val toSeq : MdMap<'k,'v> -> ('k list * 'v) seq
+    val map: ('v -> 'w) -> MdMap<'k,'v> -> MdMap<'k,'w>
+    val mapi: ('k list -> 'v -> 'w) -> MdMap<'k,'v> -> MdMap<'k,'w>
+    /// Creates new md-map by replacing items with index of length greater than the `rank`.
+    val trim : rank:int -> ('k list -> MdMap<'k,'v>) -> MdMap<'k,'v> -> MdMap<'k,'v>
+    val merge : ('k list * 'v option * 'v option -> 'v) -> MdMap<'k,'v> -> MdMap<'k,'v> -> MdMap<'k,'v>
     /// Builds a jagged array with element type `'value` and elements corresponding to the md-map values,
     /// using integer keys as array indices.
     /// If the md-map has rank zero, the function fails.
     /// If there are missing elements in the md-map, the function fails.
-    val toJaggedArray: MdMap<int,'value> -> System.Array
-
-    // Utility functions
-    val map: ('valueA -> 'valueB) -> MdMap<'key,'valueA> -> MdMap<'key,'valueB>
-    val mapi: (MdKey<'key> -> 'valueA -> 'valueB) -> MdMap<'key,'valueA> -> MdMap<'key,'valueB>
-    /// Creates new md-map by replacing items with index of length greater than the `rank`.
-    val trim : rank:int -> (MdKey<'key> -> MdMap<'key,'value>) -> MdMap<'key,'value> -> MdMap<'key,'value>
-    val merge : (MdKey<'key> * 'value option * 'value option -> 'value) -> MdMap<'key,'value> -> MdMap<'key,'value> -> MdMap<'key,'value>
-    
-    // Construction
-    val ofItem: 'value -> MdMap<_,'value>
-    val ofPair: MdKey<'key> * MdMap<'key, 'value> -> MdMap<'key, 'value>
+    val toJaggedArray : MdMap<int,_> -> 't
