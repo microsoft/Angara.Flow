@@ -1,4 +1,4 @@
-﻿namespace Angare.Data
+﻿namespace Angara.Data
 
 type MdKey<'key when 'key : comparison> = 'key list
 

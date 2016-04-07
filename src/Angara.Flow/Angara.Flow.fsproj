@@ -50,7 +50,9 @@
     <Compile Include="Graph.fsi" />
     <Compile Include="Graph.fs" />
     <Compile Include="State.fsi" />
+    <Compile Include="State.fs" />
     <Compile Include="StateMachine.fsi" />
+    <Compile Include="StateMachine.fs" />
   </ItemGroup>
   <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>
