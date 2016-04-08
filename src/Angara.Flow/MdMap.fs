@@ -8,6 +8,12 @@ type internal MdMapTree<'key, 'value when 'key : comparison> =
 
 [<RequireQualifiedAccess>]
 module internal MdMapTree =
+    type OptionBuilder() =
+        member x.Bind(v,f) = Option.bind f v
+        member x.Return v = Some v
+        member x.ReturnFrom o = o
+    let opt = OptionBuilder()
+
     let internal ofPair (key:'key list, value:MdMapTree<'key, 'value>) : MdMapTree<'key, 'value> =
         Seq.foldBack(fun k sub -> Map.empty |> Map.add k sub |> MdMapTree.Map) key value
                                  
@@ -28,6 +34,19 @@ module internal MdMapTree =
         | _, [] -> Some map
         | MdMapTree.Map values, k :: tail -> Map.tryFind k values |> Option.bind (tryGet tail)
         | MdMapTree.Value _, _ :: _ -> None
+
+    let startingWith (key:'key list) (map:MdMapTree<'key,'value>) : MdMapTree<'key,'value> option =
+        let rec f key map = 
+            match map, key with
+            | _, [] -> Some map
+            | MdMapTree.Map values, k :: tail -> 
+                opt {
+                    let! kv = Map.tryFind k values
+                    let! newKv = f tail kv
+                    return MdMapTree.Map (Map.empty.Add(k, newKv))
+                }
+            | MdMapTree.Value _, _ :: _ -> None
+        f key map
 
     let toSeq (map:MdMapTree<'key,'value>) : ('key list * 'value) seq =
         let rec f rkey = function
@@ -122,9 +141,28 @@ module MdMap =
 
     let set (key:'key list) (value:MdMap<'key,'value>) (map:MdMap<'key,'value>) : MdMap<'key,'value> =
         MdMap(MdMapTree.set key value.Tree map.Tree)
+
+    let add (key:'key list) (value:'value) (map:MdMap<'key,'value>) : MdMap<'key,'value> =
+        MdMap(MdMapTree.set key (MdMapTree.Value value) map.Tree)
     
     let rec tryGet (key:'key list) (map:MdMap<'key,'value>) : MdMap<'key,'value> option =
         MdMapTree.tryGet key map.Tree |> Option.map(fun t -> MdMap(t))
+
+    let rec get (key:'key list) (map:MdMap<'key,'value>) : MdMap<'key,'value> =
+        match tryGet key map with
+        | Some m -> m
+        | None -> raise (new System.Collections.Generic.KeyNotFoundException("The md-map doesn't contain the given key"))
+
+    let startingWith (key:'key list) (map:MdMap<'key,'value>) : MdMap<'key,'value> =
+        match MdMapTree.startingWith key map.Tree with
+        | Some m -> MdMap(m)
+        | None -> empty
+
+    let rec find (key:'key list) (map:MdMap<'key,'value>) : 'value =
+        match MdMapTree.tryGet key map.Tree with
+        | Some (MdMapTree.Value v) -> v
+        | Some (MdMapTree.Map _) -> invalidOp "The given key corresponds to a md-map but not a scalar"
+        | None -> raise (new System.Collections.Generic.KeyNotFoundException("The md-map doesn't contain the given key"))
 
     let toShallowSeq (map:MdMap<'key,'value>) : ('key*MdMap<'key,'value>) seq =
         match map.Tree with

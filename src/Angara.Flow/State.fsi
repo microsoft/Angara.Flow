@@ -11,13 +11,13 @@ open Angara.Data
 /// Each dataflow vertex has a non-negative rank, determined by its input edges.
 /// The vertex state is a result of multiple vertex executions,
 /// represented as multidimensional map from vertex index to execution result state, `'vs`.
-type VertexState<'vs> = MdMap<int, 'vs>
+type MdVertexState<'vs> = MdMap<int, 'vs>
 /// A key in the multidimensional vertex state.
-type VertexIndex = MdKey<int>
+type VertexIndex = int list
 
 /// Keeps state of vertices.
 type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> =
-    Map<'v, VertexState<'vs>>
+    Map<'v, MdVertexState<'vs>>
 
 
 

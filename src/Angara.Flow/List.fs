@@ -47,6 +47,8 @@ let takeEqualOrLess (n: int) (l: 'a list) : 'a list =
                 | x::xs -> f (n-1) (head @ [x]) xs
     f n [] l
 
+/// Returns a new list with is identical to the given list but without last element; 
+/// if the list is empty, fails.
 let removeLast (l: 'a list) : 'a list = 
     let rec f (h: 'a list) (t: 'a list) =
         match t with

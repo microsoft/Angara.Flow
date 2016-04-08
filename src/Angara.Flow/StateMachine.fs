@@ -38,23 +38,24 @@ type VertexStatus =
         | CanStart time -> sprintf "CanStart since %d" time
         | Started (it,time) -> sprintf "Started at %d, iteration %d" time it
 
-[<Interface>]
-type IVertexState =
-    abstract member Status : VertexStatus
+type VertexState<'d>  = {
+    Status : VertexStatus
+    Data : 'd
+}
 
-type State<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> =
+type State<'v,'d when 'v:comparison and 'v:>IVertex> =
     { Graph : DataFlowGraph<'v>
-      Status : DataFlowState<'v,'vs> 
+      Status : DataFlowState<'v,VertexState<'d>> 
       TimeIndex : TimeIndex }
 
-type VertexChanges<'vs> = 
-    | New of VertexState<'vs>
+type VertexChanges<'d> = 
+    | New of MdVertexState<VertexState<'d>>
     | Removed 
-    | ShapeChanged of old:VertexState<'vs> * current:VertexState<'vs> * isConnectionChanged:bool 
-    | Modified of indices:Set<VertexIndex> * old:VertexState<'vs> * current:VertexState<'vs> * isConnectionChanged:bool 
+    | ShapeChanged of old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
+    | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     
-type Changes<'v,'vs when 'v : comparison> = Map<'v, VertexChanges<'vs>>
-let noChanges<'v,'vs when 'v : comparison> = Map.empty<'v, VertexChanges<'vs>>
+type Changes<'v,'d when 'v : comparison> = Map<'v, VertexChanges<'d>>
+let noChanges<'v,'d when 'v : comparison> = Map.empty<'v, VertexChanges<'d>>
 
 type Response<'a> =
     | Success       of 'a
@@ -80,11 +81,11 @@ type SucceededRemoteVertexItem<'v> =
 
 type RemoteVertexSucceeded<'v> = 'v * SucceededRemoteVertexItem<'v> list
 
-type Message<'v,'vs,'output when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> =
+type Message<'v,'d,'output when 'v:comparison and 'v:>IVertex> =
     | Alter of 
         disconnect:  (('v * InputRef) * ('v * OutputRef) option) list *
         remove:      ('v * RemoveStrategy) list *
-        merge:       (DataFlowGraph<'v> * DataFlowState<'v,'vs>) *
+        merge:       (DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) *
         connect:     AlterConnection<'v> list *
         reply:       ReplyChannel<unit>
     | Start     of 'v * Option<VertexIndex * Option<TimeIndex>> * ReplyChannel<bool>
@@ -94,11 +95,11 @@ type Message<'v,'vs,'output when 'v:comparison and 'v:>IVertex and 'vs:>IVertexS
     | RemoteSucceeded of RemoteVertexSucceeded<'v> 
 
 [<Interface>]
-type IStateMachine<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> = 
+type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex> = 
     inherit System.IDisposable
     abstract Start : unit -> unit
-    abstract State: State<'v,'vs>
-    abstract OnChanged : System.IObservable<State<'v,'vs> * Changes<'v,'vs>>
+    abstract State : State<'v,'d>
+    abstract OnChanged : System.IObservable<State<'v,'d> * Changes<'v,'d>>
 
 
 //////////////////////////////////////////////////
@@ -109,9 +110,87 @@ type IStateMachine<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexSta
 
 open Angara.Data
 
-let internal add (state:DataFlowState<_,_>, changes:Changes<_,_>) (v, vs) = state.Add(v,vs), changes.Add(v, VertexChanges.New vs)
+let internal add (state:DataFlowState<_,_>, changes:Changes<_,_>) (v, vs) = state.Add(v, vs), changes.Add(v, VertexChanges.New vs)
 
-let normalize<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> (state : State<'v,'vs>) : State<'v,'vs> * Changes<'v,'vs> =
+let internal modifyAt (state:DataFlowState<_,_>, changes:Changes<_,_>) v index vis = 
+    let vs = state.[v] |> MdMap.add index vis
+    let c = match changes.TryFind(v) with
+            | Some(New _) -> New(vs)
+            | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
+            | Some(Modified(indices,oldvs,_,connChanged)) -> Modified(indices |> Set.add index, oldvs, vs, connChanged)
+            | Some(Removed) -> failwith "Removed vertex cannot be modified"
+            | None -> Modified(Set.empty |> Set.add index, state.[v], vs, false)
+    state.Add(v,vs), changes.Add(v,c)
+
+/// Builds tree indices of the immediate dependent vertices.
+/// Preconditions: either case:
+/// (1) v[index] is CanStart
+/// (2) v[index] is Uptodate
+/// Both guarantees that all dimensions lengths of the vertex scope except at least of last are known.
+let rec downstreamVerticesFor (outEdges: Edge<'v> seq) (index:VertexIndex) (graph:DataFlowGraph<'v>,state:DataFlowState<'v,'d>) =   
+    outEdges |> Seq.map(fun e -> 
+        let baseIndex = 
+            match e.Type with
+            | OneToOne _ | Collect (_,_) -> index // actual indices will be equal are greater
+            | Scatter _ -> index // actual indices will be greater
+            | Reduce _ -> List.removeLast index
+        // The function precondition guarantee that target vertex state map has items at baseIndex or deeper, 
+        // depending on the extra dimensions in respect to the edge scope
+        match state.TryFind e.Target with
+        | Some tvs -> tvs |> MdMap.startingWith baseIndex |> MdMap.toSeq |> Seq.map (fun (i,_) -> e.Target, i)
+        | None -> Seq.empty
+        ) |> Seq.concat
+
+/// Builds tree indices of the immediate dependent vertices.
+/// Preconditions: either case:
+/// (1) v[index] is CanStart
+/// (2) v[index] is Uptodate
+/// Both guarantees that all dimensions lengths of the vertex scope except at least of last are known.
+let rec downstreamVertices(v, index:VertexIndex) (graph:DataFlowGraph<'v>,state:DataFlowState<'v,'d>) =
+    downstreamVerticesFor (v |> graph.Structure.OutEdges) index (graph,state)
+
+/// Move given vertex item to "CanStart", increases its version number
+let internal makeCanStart time (v, index:VertexIndex) (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>, changes) = 
+    let vis = state.[v] |> MdMap.find index
+    let state, changes = modifyAt (state,changes) v index { vis with Status = VertexStatus.CanStart time }
+    let state, changes = downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToIncomplete vi (graph,s,c) OutdatedInputs) (state,changes)
+    state, changes
+
+/// Updates status of a single index of the vertex status (i.e. scope remains the same)
+let rec internal downstreamToCanStartOrIncomplete<'v when 'v : comparison and 'v :> IVertex> 
+    time (v:'v, index:VertexIndex) (graph: DataFlowGraph<_>,state: DataFlowState<_,_>, changes: Changes<_,_>) : DataFlowState<_,_> * Changes<_,_> = 
+    let (state,changes) = 
+        match v.Inputs.Length with
+        | 0 -> makeCanStart time (v,index) (graph,state,changes) // can start as it is now
+        | _ as n -> 
+            let inedges = graph.Structure.InEdges v |> Seq.toList
+            let allAssigned = allInputsAssigned graph v
+            if allAssigned then 
+                    let statuses = inedges |> Seq.map(fun e -> upstreamArtefactStatus (e,index) graph state) |> Seq.concat
+                    let transients, outdated, unassigned = statuses |> Seq.fold(fun (transients,outdated,unassigned) status -> 
+                        match status with 
+                        | Transient (v,vi) -> (v,vi)::transients, outdated, unassigned
+                        | Outdated -> (transients, true, unassigned)
+                        | Missing  -> (transients, outdated, true)
+                        | Uptodate -> (transients, outdated, unassigned)) (List.empty,false,false)
+                
+                    match transients, outdated||unassigned with
+                        (* has transient input, has outdated input *)
+                        | _, true -> // there are outdated input artefacts 
+                                downstreamToIncomplete (v,index) (graph,state,changes) (if unassigned then UnassignedInputs else OutdatedInputs)
+
+                        | transients, false when transients.Length > 0 -> // there are transient input artefacts
+                                (* starting upstream transient methods *)
+                                let transients = transients |> Seq.distinct
+                                let state,changes = transients |> Seq.fold(fun (s,c) t -> startTransient time t graph (s,c)) (state,changes)
+                                downstreamToIncomplete (v,index) (graph,state,changes) TransientInputs
+
+                        | _ -> makeCanStart time (v,index) (graph,state,changes) // can start as it is now
+            else // has unassigned inputs
+                downstreamToIncomplete (v,index) (graph,state,changes) UnassignedInputs
+    state, changes
+
+let normalize<'v,'d when 'v:comparison and 'v:>IVertex> (state : State<'v,'d>) : State<'v,'d> * Changes<'v,'d> =
     // Initial state
     let dag = state.Graph.Structure
         

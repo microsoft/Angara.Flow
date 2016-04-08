@@ -51,13 +51,17 @@ type VertexStatus =
     /// `time` keeps time index when the vertex entered this status.
     | CanStart                  of time: TimeIndex    
 
-[<Interface>]
-type IVertexState =
-    abstract member Status : VertexStatus
 
-type State<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> =
+/// Keeps status and data of a vertex as part of the StateMachine state.
+type VertexState<'d>  = {
+    Status : VertexStatus
+    Data : 'd
+}
+
+/// An immutable type which keeps state for the StateMachine.
+type State<'v,'d when 'v:comparison and 'v:>IVertex> =
     { Graph : DataFlowGraph<'v>
-      Status : DataFlowState<'v,'vs> 
+      Status : DataFlowState<'v,VertexState<'d>> 
       TimeIndex : TimeIndex }
 
 ////////////////////////
@@ -67,15 +71,15 @@ type State<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> =
 ////////////////////////
 
 /// Describes changes that can occur with dataflow vertex.
-type VertexChanges<'vs> = 
-    | New of VertexState<'vs>
+type VertexChanges<'d> = 
+    | New of MdVertexState<VertexState<'d>>
     | Removed 
     /// Shape of a vertex state could be changed.
-    | ShapeChanged of old:VertexState<'vs> * current:VertexState<'vs> * isConnectionChanged:bool 
+    | ShapeChanged of old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     /// Some items of a vertex state are changed.
-    | Modified of indices:Set<VertexIndex> * old:VertexState<'vs> * current:VertexState<'vs> * isConnectionChanged:bool 
+    | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     
-type Changes<'v,'vs when 'v : comparison> = Map<'v, VertexChanges<'vs>>
+type Changes<'v,'d when 'v : comparison> = Map<'v, VertexChanges<'d>>
 
 
 ////////////////////////
@@ -111,11 +115,11 @@ type SucceededRemoteVertexItem<'v> =
 
 type RemoteVertexSucceeded<'v> = 'v * SucceededRemoteVertexItem<'v> list
 
-type Message<'v,'vs,'output when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> =
+type Message<'v,'d,'output when 'v:comparison and 'v:>IVertex> =
     | Alter of 
         disconnect:  (('v * InputRef) * ('v * OutputRef) option) list *
         remove:      ('v * RemoveStrategy) list *
-        merge:       (DataFlowGraph<'v> * DataFlowState<'v,'vs>) *
+        merge:       (DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) *
         connect:     AlterConnection<'v> list *
         reply:       ReplyChannel<unit>
     /// Starts methods. Replies true, if method is started; otherwise, false.
@@ -138,11 +142,11 @@ type Message<'v,'vs,'output when 'v:comparison and 'v:>IVertex and 'vs:>IVertexS
 /// if it has missing states, they are filled with a state based on the dependency graph.
 /// The returned graph and time index are identical to the original graph and time index.
 /// The returned changes describe the changes made in the returned state if compare to the given state.
-val normalize<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState and 'vs:(new:VertexStatus->'vs)> : State<'v,'vs> -> State<'v,'vs> * Changes<'v,'vs>
+val normalize<'v,'d when 'v:comparison and 'v:>IVertex> : State<'v,'d> -> State<'v,'d> * Changes<'v,'d>
     
 [<Interface>]
-type IStateMachine<'v,'vs when 'v:comparison and 'v:>IVertex and 'vs:>IVertexState> = 
+type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex> = 
     inherit System.IDisposable
     abstract Start : unit -> unit
-    abstract State: State<'v,'vs>
-    abstract OnChanged : System.IObservable<State<'v,'vs> * Changes<'v,'vs>>
+    abstract State : State<'v,'d>
+    abstract OnChanged : System.IObservable<State<'v,'d> * Changes<'v,'d>>

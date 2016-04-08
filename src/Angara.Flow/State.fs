@@ -3,6 +3,6 @@
 open Angara.Graph
 open Angara.Data
 
-type VertexState<'vs> = MdMap<int, 'vs>
-type VertexIndex = MdKey<int>
-type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> = Map<'v, VertexState<'vs>>
+type MdVertexState<'vs> = MdMap<int, 'vs>
+type VertexIndex = int list
+type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> = Map<'v, MdVertexState<'vs>>
