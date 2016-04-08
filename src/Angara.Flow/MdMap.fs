@@ -158,6 +158,11 @@ module MdMap =
         | Some m -> MdMap(m)
         | None -> empty
 
+    let rec tryFind (key:'key list) (map:MdMap<'key,'value>) : 'value option =
+        match MdMapTree.tryGet key map.Tree with
+        | Some (MdMapTree.Value v) -> Some v
+        | Some (MdMapTree.Map _) | None -> None
+
     let rec find (key:'key list) (map:MdMap<'key,'value>) : 'value =
         match MdMapTree.tryGet key map.Tree with
         | Some (MdMapTree.Value v) -> v

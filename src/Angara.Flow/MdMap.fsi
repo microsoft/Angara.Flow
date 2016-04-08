@@ -45,5 +45,6 @@ module MdMap =
     val toJaggedArray : MdMap<int,_> -> 't
 
     val find : mdkey:'k list -> mdmap:MdMap<'k,'v> -> 'v
+    val tryFind : mdkey:'k list -> mdmap:MdMap<'k,'v> -> 'v option
     /// Returns a new md-map having the given scalar value for the given md-key.
     val add: 'k list -> 'v -> MdMap<'k,'v> -> MdMap<'k,'v>

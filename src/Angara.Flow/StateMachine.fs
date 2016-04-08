@@ -127,7 +127,7 @@ let internal modifyAt (state:DataFlowState<_,_>, changes:Changes<_,_>) v index v
 /// (1) v[index] is CanStart
 /// (2) v[index] is Uptodate
 /// Both guarantees that all dimensions lengths of the vertex scope except at least of last are known.
-let rec downstreamVerticesFor (outEdges: Edge<'v> seq) (index:VertexIndex) (graph:DataFlowGraph<'v>,state:DataFlowState<'v,'d>) =   
+let rec internal downstreamVerticesFor (outEdges: Edge<'v> seq) (index:VertexIndex) (graph:DataFlowGraph<'v>,state:DataFlowState<'v,'d>) =   
     outEdges |> Seq.map(fun e -> 
         let baseIndex = 
             match e.Type with
@@ -146,8 +146,43 @@ let rec downstreamVerticesFor (outEdges: Edge<'v> seq) (index:VertexIndex) (grap
 /// (1) v[index] is CanStart
 /// (2) v[index] is Uptodate
 /// Both guarantees that all dimensions lengths of the vertex scope except at least of last are known.
-let rec downstreamVertices(v, index:VertexIndex) (graph:DataFlowGraph<'v>,state:DataFlowState<'v,'d>) =
+let rec internal downstreamVertices(v, index:VertexIndex) (graph:DataFlowGraph<'v>,state:DataFlowState<'v,VertexState<'d>>) =
     downstreamVerticesFor (v |> graph.Structure.OutEdges) index (graph,state)
+
+let internal tryGetStateItem (state:DataFlowState<'v,VertexState<'d>>) (v, i:VertexIndex) : VertexState<'d> option = 
+    match state.TryFind v with
+    | Some vs -> vs |> MdMap.tryFind i
+    | None -> None
+
+/// Moves vertex items those are downstream for the given vertex item, to an incomplete state.
+let rec internal downstreamToIncomplete (v, index:VertexIndex) (graph:DataFlowGraph<'v>,state:DataFlowState<'v,VertexState<'d>>,changes) (reason: IncompleteReason) : DataFlowState<'v,VertexState<'d>> * Changes<'v,'d> = 
+    let goFurther reason (state, changes) =
+        let downstreamOutputEdge (outedge:Edge<_>) index (state, changes) =        
+            let index = 
+                match outedge.Type with
+                | OneToOne(_) | Scatter(_) | Collect(_,_) -> index
+                | Reduce(_) -> List.removeLast index
+            downstreamToIncomplete (outedge.Target, index) (graph,state,changes) reason
+        v |> graph.Structure.OutEdges |> Seq.fold (fun sc e -> downstreamOutputEdge e index sc) (state,changes)        
+
+    let update v (vis:VertexState<'d>) index = 
+        modifyAt (state,changes) v index { vis with Status = VertexStatus.Incomplete reason }
+
+    match (v,index) |> tryGetStateItem state with
+    | Some vis ->         
+        match vis.Status with
+        | VertexStatus.Incomplete r when r = reason -> 
+            state, changes // nothing to do
+        | VertexStatus.Incomplete _ 
+        | VertexStatus.CanStart _
+        | VertexStatus.Started _ ->
+            update v vis index // downstream is already incomplete
+        | VertexStatus.Complete _
+        | VertexStatus.CompleteStarted (_, _)
+        | VertexStatus.CompleteStartRequested _ ->
+            update v vis index |> goFurther IncompleteReason.OutdatedInputs
+    | None -> // missing, i.e. already incomplete state,changes
+        state,changes
 
 /// Move given vertex item to "CanStart", increases its version number
 let internal makeCanStart time (v, index:VertexIndex) (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>, changes) = 
@@ -156,36 +191,72 @@ let internal makeCanStart time (v, index:VertexIndex) (graph:DataFlowGraph<'v>, 
     let state, changes = downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToIncomplete vi (graph,s,c) OutdatedInputs) (state,changes)
     state, changes
 
+let internal is1dArray (t:System.Type) = t.IsArray && t.GetArrayRank() = 1
+
+let internal allInputsAssigned (graph:DataFlowGraph<'v>) (v:'v) : bool =
+    let n = v.Inputs.Length
+    let inedges = graph.Structure.InEdges v |> Seq.toList
+    let allAssigned = seq{ 0 .. (n-1) } |> Seq.forall(fun inRef -> (is1dArray v.Inputs.[inRef]) || inedges |> List.exists(fun e -> e.InputRef = inRef))
+    allAssigned
+
+/// Gets either uptodate, outdated or transient status for an artefact at given index.
+/// If there is not slice with given index (e.g. if method has unassigned input port), 
+/// returns 'outdated'.
+let internal getArtefactStatus (v, index:VertexIndex, outRef:OutputRef) (state: DataFlowState<'v,VertexState<'d>>) : ArtefactStatus<'v> =
+    match (v,index) |> tryGetStateItem state with
+    | Some vis -> 
+        match IsUpToDate vis with
+        | false -> ArtefactStatus.Outdated
+        | true -> 
+            match vis.Output with // vis.Data.IsFull
+            | Full _ -> ArtefactStatus.Uptodate
+            | Partial artefacts -> if outRef < artefacts.Length && Option.isSome artefacts.[outRef] then ArtefactStatus.Uptodate else ArtefactStatus.Transient (v,index)
+    | None -> ArtefactStatus.Missing
+
+/// Gets either uptodate, outdated or transient status for an upstream artefact at given slice.
+let internal upstreamArtefactStatus (edge: Edge<'v>, index:VertexIndex) (graph: DataFlowGraph<'v>) (state: DataFlowState<'v,VertexState<'d>>) : ArtefactStatus<_> seq =
+    match edge.Type with
+    | OneToOne rank -> seq { yield getArtefactStatus (edge.Source, index |> IndexOps.reduceTo rank, edge.OutputRef) state }
+    | Scatter rank when index.Length >= rank -> seq { yield getArrayItemArtefactStatus (edge.Source, index |> IndexOps.reduceTo (rank-1), List.nth index (rank-1), edge.OutputRef) state }
+    | Scatter _ -> seq { yield ArtefactStatus.Outdated }
+    | Reduce rank -> 
+        let rs = edge.Source
+        let rs_ind = state.[rs].ToSeq (index |> IndexOps.reduceTo rank) |> Seq.map fst |> Seq.toList
+        match rs_ind with
+        | []  -> seq { yield ArtefactStatus.Outdated }
+        | _ -> rs_ind |> Seq.map(fun idx -> getArtefactStatus (edge.Source, idx, edge.OutputRef) state)
+
+    | Collect (_,rank) -> seq { yield getArtefactStatus (edge.Source, index |> IndexOps.reduceTo (rank), edge.OutputRef) state }
+
 /// Updates status of a single index of the vertex status (i.e. scope remains the same)
-let rec internal downstreamToCanStartOrIncomplete<'v when 'v : comparison and 'v :> IVertex> 
-    time (v:'v, index:VertexIndex) (graph: DataFlowGraph<_>,state: DataFlowState<_,_>, changes: Changes<_,_>) : DataFlowState<_,_> * Changes<_,_> = 
-    let (state,changes) = 
+let rec internal downstreamToCanStartOrIncomplete time (v:'v, index:VertexIndex) (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>, changes) = 
+    let state,changes =
         match v.Inputs.Length with
         | 0 -> makeCanStart time (v,index) (graph,state,changes) // can start as it is now
         | _ as n -> 
             let inedges = graph.Structure.InEdges v |> Seq.toList
             let allAssigned = allInputsAssigned graph v
             if allAssigned then 
-                    let statuses = inedges |> Seq.map(fun e -> upstreamArtefactStatus (e,index) graph state) |> Seq.concat
-                    let transients, outdated, unassigned = statuses |> Seq.fold(fun (transients,outdated,unassigned) status -> 
-                        match status with 
-                        | Transient (v,vi) -> (v,vi)::transients, outdated, unassigned
-                        | Outdated -> (transients, true, unassigned)
-                        | Missing  -> (transients, outdated, true)
-                        | Uptodate -> (transients, outdated, unassigned)) (List.empty,false,false)
+                let statuses = inedges |> Seq.map(fun e -> upstreamArtefactStatus (e,index) graph state) |> Seq.concat
+                let transients, outdated, unassigned = statuses |> Seq.fold(fun (transients,outdated,unassigned) status -> 
+                    match status with 
+                    | Transient (v,vi) -> (v,vi)::transients, outdated, unassigned
+                    | Outdated -> (transients, true, unassigned)
+                    | Missing  -> (transients, outdated, true)
+                    | Uptodate -> (transients, outdated, unassigned)) (List.empty,false,false)
                 
-                    match transients, outdated||unassigned with
-                        (* has transient input, has outdated input *)
-                        | _, true -> // there are outdated input artefacts 
-                                downstreamToIncomplete (v,index) (graph,state,changes) (if unassigned then UnassignedInputs else OutdatedInputs)
+                match transients, outdated||unassigned with
+                    (* has transient input, has outdated input *)
+                    | _, true -> // there are outdated input artefacts 
+                            downstreamToIncomplete (v,index) (graph,state,changes) (if unassigned then UnassignedInputs else OutdatedInputs)
 
-                        | transients, false when transients.Length > 0 -> // there are transient input artefacts
-                                (* starting upstream transient methods *)
-                                let transients = transients |> Seq.distinct
-                                let state,changes = transients |> Seq.fold(fun (s,c) t -> startTransient time t graph (s,c)) (state,changes)
-                                downstreamToIncomplete (v,index) (graph,state,changes) TransientInputs
+                    | transients, false when transients.Length > 0 -> // there are transient input artefacts
+                            (* starting upstream transient methods *)
+                            let transients = transients |> Seq.distinct
+                            let state,changes = transients |> Seq.fold(fun (s,c) t -> startTransient time t graph (s,c)) (state,changes)
+                            downstreamToIncomplete (v,index) (graph,state,changes) TransientInputs
 
-                        | _ -> makeCanStart time (v,index) (graph,state,changes) // can start as it is now
+                    | _ -> makeCanStart time (v,index) (graph,state,changes) // can start as it is now
             else // has unassigned inputs
                 downstreamToIncomplete (v,index) (graph,state,changes) UnassignedInputs
     state, changes
@@ -208,11 +279,11 @@ let normalize<'v,'d when 'v:comparison and 'v:>IVertex> (state : State<'v,'d>) :
         dag.Vertices |> Seq.map(fun v -> 
             state.[v].ToSeq() |> Seq.filter (fun (index,vis) -> 
                 match vis.Status with
-                | ExecutionStatus.Incomplete _ -> true
-                | ExecutionStatus.Complete _ -> false
+                | VertexStatus.Incomplete _ -> true
+                | VertexStatus.Complete _ -> false
                 | x -> failwith (sprintf "Vertex [%O@%O] has status %O which is not allowed in an initial state" v index x))
             |>Seq.map(fun q -> (v,q))) |> Seq.concat
         |> Seq.fold (fun (state, changes) (v,(i,vis)) -> downstreamToCanStartOrIncomplete 0u (v,i) (graph, state, changes)) (state, Map.empty)
 
-    //let changes = state |> Map.fold(fun (ch:Changes) v vs -> match vs.Status with ExecutionStatus.CanStart -> ch.Add(v,VertexChanges.New vs) | _ -> ch) changes
+    //let changes = state |> Map.fold(fun (ch:Changes) v vs -> match vs.Status with VertexStatus.CanStart -> ch.Add(v,VertexChanges.New vs) | _ -> ch) changes
     ((graph,state),changes)
