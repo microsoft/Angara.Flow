@@ -3,12 +3,13 @@
 [<Sealed;Class>]
 type MdMap<'k, 'v when 'k : comparison> =
     member IsScalar: bool
-    member AsScalar: unit -> 'v option    
+    member AsScalar: unit -> 'v    
     static member Empty : MdMap<'k,'v>
 
 [<RequireQualifiedAccessAttribute>]
 module MdMap =
     val empty<'k, 'v when 'k : comparison> : MdMap<'k,'v>
+    /// Returns a new md-map which is scalar having the given value for an empty key.
     val scalar: 'v -> MdMap<_,'v>
     val set: 'k list -> MdMap<'k,'v> -> MdMap<'k,'v> -> MdMap<'k,'v>    
     /// Returns a new md-map built from the given `mdmap` by
@@ -35,8 +36,10 @@ module MdMap =
     val toSeq : MdMap<'k,'v> -> ('k list * 'v) seq
     val map: ('v -> 'w) -> MdMap<'k,'v> -> MdMap<'k,'w>
     val mapi: ('k list -> 'v -> 'w) -> MdMap<'k,'v> -> MdMap<'k,'w>
-    /// Creates new md-map by replacing items with index of length greater than the `rank`.
-    val trim : rank:int -> ('k list -> MdMap<'k,'v>) -> MdMap<'k,'v> -> MdMap<'k,'v>
+    /// Creates new md-map by replacing items with index of length greater than the `rank` by
+    /// trimming the index to contain `rank` elements and the value returned by the given function.
+    /// The `replace` function always gets a key of length `rank` and the corresponding md-map.
+    val trim : rank:int -> replace:('k list -> MdMap<'k,'v> -> MdMap<'k,'v>) -> MdMap<'k,'v> -> MdMap<'k,'v>
     val merge : ('k list * 'v option * 'v option -> 'v) -> MdMap<'k,'v> -> MdMap<'k,'v> -> MdMap<'k,'v>
     /// Builds a jagged array with element type `'value` and elements corresponding to the md-map values,
     /// using integer keys as array indices.

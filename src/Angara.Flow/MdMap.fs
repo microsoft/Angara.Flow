@@ -94,10 +94,10 @@ module internal MdMapTree =
             | MdMapTree.Map values -> MdMapTree.Map (values |> Map.map(fun i -> g (i :: rkey)))
         g [] mdmap
 
-    let trim (rank:int) (replace: 'key list -> MdMapTree<'key,'value>) (map:MdMapTree<'key,'value>) : MdMapTree<'key,'value> =
+    let trim (rank:int) (replace: 'key list -> MdMapTree<'key,'value> -> MdMapTree<'key,'value>) (map:MdMapTree<'key,'value>) : MdMapTree<'key,'value> =
         let rec f h rkey map =
             if h < 0 then invalidArg "rank" "Rank is negative"
-            else if h = 0 then replace (List.rev rkey)
+            else if h = 0 then replace (List.rev rkey) map
             else
                 match map with
                 | MdMapTree.Value _ -> map
@@ -183,12 +183,12 @@ module MdMap =
     let rec mapi (f:'key list -> 'valueA -> 'valueB) (map:MdMap<'key,'valueA>) : MdMap<'key,'valueB> =
         MdMap(map.Tree |> MdMapTree.mapi f)
 
-    let trim (rank:int) (replace: 'key list -> MdMap<'key,'value>) (map:MdMap<'key,'value>) : MdMap<'key,'value> =
-        MdMap(map.Tree |> MdMapTree.trim rank (fun k -> (replace k).Tree))
+    let trim (rank:int) (replace: 'key list -> MdMap<'key,'value> -> MdMap<'key,'value>) (map:MdMap<'key,'value>) : MdMap<'key,'value> =
+        MdMap(map.Tree |> MdMapTree.trim rank (fun k m -> (replace k (MdMap(m))).Tree))
 
     let merge (f:'key list * 'value option * 'value option -> 'value) (map1:MdMap<'key,'value>) (map2:MdMap<'key,'value>) : MdMap<'key,'value> =
         MdMap(MdMapTree.merge f map1.Tree map2.Tree)
 
     let toJaggedArray (map:MdMap<int,'value>) : 't =
         let array = MdMapTree.toJaggedArray map.Tree
-        array :?> 't
+        box(array) :?> 't

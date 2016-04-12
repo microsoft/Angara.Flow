@@ -38,7 +38,9 @@ let rec contains (v: 'a) (l: 'a list) =
     | x::[] -> x = v
     | x::xs -> x = v || contains v xs
 
-let takeEqualOrLess (n: int) (l: 'a list) : 'a list =
+/// If the given list has length greater than `n`, returns first `n` elements.
+/// Otheriwse, returns the list intact.
+let ofMaxLength (n: int) (l: 'a list) : 'a list =
     let rec f (n: int) (head: 'a list) (tail: 'a list) : 'a list =
         if n = 0 then head
         else match tail with
