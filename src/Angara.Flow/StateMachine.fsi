@@ -67,7 +67,7 @@ type VertexState<'d when 'd:>IVertexData>  = {
     /// Keeps data associated with the vertex.
     /// Data can be presented or missing for any status.
     /// If status is `Complete`, data still can be missing or partial. For example,
-    /// the state is deserialized and data is transiend.
+    /// the state is deserialized and data is transient.
     /// Also, if status is `Incomplete`, data can be presented but obsolete.
     Data : 'd option
 } with
@@ -99,16 +99,6 @@ type VertexChanges<'d when 'd:>IVertexData> =
     | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     
 type Changes<'v,'d when 'v : comparison and 'd:>IVertexData> = Map<'v, VertexChanges<'d>>
-
-[<RequireQualifiedAccessAttribute>]
-module internal Changes =
-    /// Returns new state and changes reflecting new vertex.
-    val vertexAdded : DataFlowState<'v,VertexState<'d>> * Changes<'v,'d> -> 'v -> MdVertexState<VertexState<'d>> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
-    /// Returns new state and changes reflecting that shape of the vertex state probably is changed.
-    val vertexShapeChanged : DataFlowState<'v,VertexState<'d>> * Changes<'v,'d> -> 'v -> MdVertexState<VertexState<'d>> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
-    /// Returns new state and changes reflecting new status of a vertex for the given index.
-    val vertexStateChanged : DataFlowState<'v,VertexState<'d>> * Changes<'v,'d> -> 'v -> VertexIndex -> VertexState<'d> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
-
 
 ////////////////////////
 //
@@ -143,7 +133,7 @@ type SucceededRemoteVertexItem<'v> =
 
 type RemoteVertexSucceeded<'v> = 'v * SucceededRemoteVertexItem<'v> list
 
-type Message<'v,'d,'output when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
+type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
     | Alter of 
         disconnect:  (('v * InputRef) * ('v * OutputRef) option) list *
         remove:      ('v * RemoveStrategy) list *
@@ -155,7 +145,7 @@ type Message<'v,'d,'output when 'v:comparison and 'v:>IVertex and 'd:>IVertexDat
     /// in "CanStart" status and all are started; otherwise, nothing happens and message is replied with "false".
     | Start     of 'v * Option<VertexIndex * Option<TimeIndex>> * ReplyChannel<bool>
     | Stop      of 'v
-    | Succeeded of 'v * VertexIndex * final: bool * 'output * startTime: TimeIndex // if not "final" the next iterations are coming
+    | Succeeded of 'v * VertexIndex * final: bool * 'd * startTime: TimeIndex // if not "final" the next iterations are coming
     | Failed    of 'v * VertexIndex * failure: System.Exception * startTime: TimeIndex
     | RemoteSucceeded of RemoteVertexSucceeded<'v> 
 
@@ -170,7 +160,7 @@ type Message<'v,'d,'output when 'v:comparison and 'v:>IVertex and 'd:>IVertexDat
 /// if it has missing states, they are filled with a state based on the dependency graph.
 /// The returned graph and time index are identical to the original graph and time index.
 /// The returned changes describe the changes made in the returned state if compare to the given state.
-val normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> : State<'v,'d> -> State<'v,'d> * Changes<'v,'d>
+val normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> : DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
     
 [<Interface>]
 type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> = 

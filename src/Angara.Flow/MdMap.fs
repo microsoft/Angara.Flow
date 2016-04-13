@@ -8,11 +8,7 @@ type internal MdMapTree<'key, 'value when 'key : comparison> =
 
 [<RequireQualifiedAccess>]
 module internal MdMapTree =
-    type OptionBuilder() =
-        member x.Bind(v,f) = Option.bind f v
-        member x.Return v = Some v
-        member x.ReturnFrom o = o
-    let opt = OptionBuilder()
+    open Angara.Option
 
     let internal ofPair (key:'key list, value:MdMapTree<'key, 'value>) : MdMapTree<'key, 'value> =
         Seq.foldBack(fun k sub -> Map.empty |> Map.add k sub |> MdMapTree.Map) key value

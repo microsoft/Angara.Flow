@@ -2,6 +2,7 @@
 
 open Angara.Graph
 open Angara.State
+open Angara.Option
 
 type TimeIndex = uint32
 
@@ -90,7 +91,7 @@ type SucceededRemoteVertexItem<'v> =
 
 type RemoteVertexSucceeded<'v> = 'v * SucceededRemoteVertexItem<'v> list
 
-type Message<'v,'d,'output when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
+type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
     | Alter of 
         disconnect:  (('v * InputRef) * ('v * OutputRef) option) list *
         remove:      ('v * RemoveStrategy) list *
@@ -99,7 +100,7 @@ type Message<'v,'d,'output when 'v:comparison and 'v:>IVertex and 'd:>IVertexDat
         reply:       ReplyChannel<unit>
     | Start     of 'v * Option<VertexIndex * Option<TimeIndex>> * ReplyChannel<bool>
     | Stop      of 'v
-    | Succeeded of 'v * VertexIndex * final: bool * 'output * startTime: TimeIndex // if not "final" the next iterations are coming
+    | Succeeded of 'v * VertexIndex * final: bool * 'd * startTime: TimeIndex // if not "final" the next iterations are coming
     | Failed    of 'v * VertexIndex * failure: System.Exception * startTime: TimeIndex
     | RemoteSucceeded of RemoteVertexSucceeded<'v> 
 
@@ -121,8 +122,12 @@ open Angara.Data
 
 [<RequireQualifiedAccessAttribute>]
 module internal Changes =
-    let vertexAdded (state:DataFlowState<_,_>, changes:Changes<_,_>) v vs = state.Add(v, vs), changes.Add(v, VertexChanges.New vs)
-    let vertexShapeChanged (state:DataFlowState<_,_>, changes:Changes<_,_>) v vs = 
+    /// Returns new state and changes reflecting new vertex.
+    let add (state:DataFlowState<_,_>, changes:Changes<_,_>) v vs = state.Add(v, vs), changes.Add(v, VertexChanges.New vs)
+    /// Returns new state and changes reflecting the removed vertex.
+    let remove (state:DataFlowState<_,_>, changes:Changes<_,_>) v = state.Remove(v), changes.Add(v, VertexChanges.Removed)
+    /// Returns new state and changes reflecting that shape of the vertex state probably is changed.
+    let replace (state:DataFlowState<_,_>, changes:Changes<_,_>) v vs = 
         let c = match changes.TryFind v with
                 | Some(New _) -> New(vs)
                 | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
@@ -130,7 +135,8 @@ module internal Changes =
                 | Some(Removed) -> failwith "Removed vertex cannot be modified"
                 | None -> ShapeChanged(state.[v],vs,false)
         state.Add(v,vs), changes.Add(v,c)
-    let vertexStateChanged (state:DataFlowState<_,_>, changes:Changes<_,_>) v index vis = 
+    /// Returns new state and changes reflecting new status of a vertex for the given index.
+    let update (state:DataFlowState<_,_>, changes:Changes<_,_>) v index vis = 
         let vs = state.[v] |> MdMap.add index vis
         let c = match changes.TryFind(v) with
                 | Some(New _) -> New(vs)
@@ -139,6 +145,20 @@ module internal Changes =
                 | Some(Removed) -> failwith "Removed vertex cannot be modified"
                 | None -> Modified(Set.empty |> Set.add index, state.[v], vs, false)
         state.Add(v,vs), changes.Add(v,c)
+    /// Returns new state and changes reflecting that the vertex has new input edges.
+    let internal vertexInputChanged v (state:DataFlowState<_,_>, changes:Changes<_,_>) = 
+        let c = match changes.TryFind(v) with
+                | Some(New vs) -> New(vs)
+                | Some(ShapeChanged(oldvs,vs,_)) -> ShapeChanged(oldvs,vs,true)
+                | Some(Modified(ind,oldvs,vs,_)) -> Modified(ind,oldvs,vs,true)
+                | Some(Removed) -> failwith "Removed vertex cannot be modified"
+                | None -> Modified(Set.empty,state.[v],state.[v],true)
+        state, changes.Add(v,c)
+
+module internal HasStatus = 
+    let upToDate = function Complete _ | CompleteStarted _ | CompleteStartRequested _ -> true | _ -> false
+    let complete = function Complete _ -> true | _ -> false
+    let incompleteReason reason = function Incomplete r when r = reason -> true | _ -> false
 
 /// Builds tree indices of the immediate dependent vertices.
 /// Preconditions: either case:
@@ -184,7 +204,7 @@ let rec internal downstreamToIncomplete (v, index:VertexIndex) (graph:DataFlowGr
         v |> graph.Structure.OutEdges |> Seq.fold (fun sc e -> downstreamOutputEdge e index sc) (state,changes)        
 
     let update v (vis:VertexState<'d>) index = 
-        Changes.vertexStateChanged (state,changes) v index { vis with Status = VertexStatus.Incomplete reason }
+        Changes.update (state,changes) v index { vis with Status = VertexStatus.Incomplete reason }
 
     match (v,index) |> tryGetStateItem state with
     | Some vis ->         
@@ -205,7 +225,7 @@ let rec internal downstreamToIncomplete (v, index:VertexIndex) (graph:DataFlowGr
 /// Move given vertex item to "CanStart", increases its version number
 let internal makeCanStart time (v, index:VertexIndex) (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>, changes) = 
     let vis = state.[v] |> MdMap.find index
-    let state, changes = Changes.vertexStateChanged (state,changes) v index { vis with Status = VertexStatus.CanStart time }
+    let state, changes = Changes.update (state,changes) v index { vis with Status = VertexStatus.CanStart time }
     let state, changes = downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToIncomplete vi (graph,s,c) OutdatedInputs) (state,changes)
     state, changes
 
@@ -219,16 +239,13 @@ let internal allInputsAssigned (graph:DataFlowGraph<'v>) (v:'v) : bool =
 
 type internal ArtefactStatus<'v> = Transient of 'v * VertexIndex | Uptodate | Outdated | Missing
 
-let internal statusUpToDate (vs:VertexState<_>) = 
-    match vs.Status with Complete _ | CompleteStarted _ | CompleteStartRequested _ -> true | _ -> false
-
 /// Gets either uptodate, outdated or transient status for an artefact at given index.
 /// If there is not slice with given index (e.g. if method has unassigned input port), 
 /// returns 'outdated'.
 let internal getArtefactStatus(v:'v, index:VertexIndex, outRef:OutputRef) (state: DataFlowState<'v,VertexState<'d>>) : ArtefactStatus<'v> =
     match (v,index) |> tryGetStateItem state with
     | Some vis -> 
-        match statusUpToDate vis, vis.Data with
+        match HasStatus.upToDate vis.Status, vis.Data with
         | false, _ -> ArtefactStatus.Outdated
         | true, Some data -> 
             match data.Contains outRef with 
@@ -243,7 +260,7 @@ let internal getArtefactStatus(v:'v, index:VertexIndex, outRef:OutputRef) (state
 let internal getArrayItemArtefactStatus (v, index:VertexIndex, arrayIndex:int, outRef:OutputRef) (state: DataFlowState<'v,VertexState<'d>>) : ArtefactStatus<'v> =
     match (v,index) |> tryGetStateItem state with
     | Some vis -> 
-        match statusUpToDate vis, vis.Data with
+        match HasStatus.upToDate vis.Status, vis.Data with
         | false, _ -> ArtefactStatus.Outdated
         | true, Some data -> 
             match data.TryGetShape outRef with
@@ -280,10 +297,10 @@ let rec internal startTransient time (v, index:VertexIndex) (graph: DataFlowGrap
         let transients = artefacts |> Seq.fold(fun t s -> match s with Transient (v,vi) -> (v,vi)::t | _ -> t) List.empty |> Seq.distinct |> Seq.toList
         if transients.Length = 0 then // no transient inputs
             let vis = { vis with Status = CompleteStarted(k,time) }
-            Changes.vertexStateChanged (state,changes) v index vis
+            Changes.update (state,changes) v index vis
         else
             let vis = { vis with Status = CompleteStartRequested(k) }
-            let state,changes = Changes.vertexStateChanged (state,changes) v index vis
+            let state,changes = Changes.update (state,changes) v index vis
             transients |> Seq.fold(fun (s,c) t -> startTransient time t graph (s,c)) (state,changes)
     | _ -> failwith (sprintf "Unsupported execution status: %s" (vis.Status.ToString()))
 
@@ -318,6 +335,8 @@ let rec internal downstreamToCanStartOrIncomplete time (v:'v, index:VertexIndex)
                 downstreamToIncomplete (v,index) (graph,state,changes) UnassignedInputs
     state, changes
 
+let internal outdatedItems n item = Seq.init n id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] (item j)) MdMap.empty
+
 /// Builds an incomplete state for the given vertex depending on states of its input vertices.
 let internal buildVertexState (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>, changes) v =            
     let edgeState (e:Edge<_>) = 
@@ -330,7 +349,7 @@ let internal buildVertexState (graph:DataFlowGraph<'v>, state: DataFlowState<'v,
             vs |> MdMap.trim (rank-1) (fun _ m -> // function called for each of vertex state with index of length `rank-1`
                 // m is always scalar since e.Source rank is `rank-1`
                 match m.AsScalar().Data |> Option.bind(fun data -> data.TryGetShape e.OutputRef) with
-                | Some shape -> Seq.init shape id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] VertexState.Outdated) MdMap.empty
+                | Some shape -> outdatedItems shape (fun _ -> VertexState.Outdated)
                 | None -> outdated)
     let vs = 
         match allInputsAssigned graph v with
@@ -341,19 +360,19 @@ let internal buildVertexState (graph:DataFlowGraph<'v>, state: DataFlowState<'v,
             | [] -> MdMap.scalar VertexState.Outdated
             | [invs] -> invs |> MdMap.map(fun _ -> VertexState.Outdated) 
             | _ -> inStates |> Seq.reduce(MdMap.merge (fun _ -> VertexState.Outdated))
-    Changes.vertexShapeChanged (state,changes) v vs
+    Changes.replace (state,changes) v vs
 
 
-let normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> (smState : State<'v,'d>) : State<'v,'d> * Changes<'v,'d> =
-    let dag = smState.Graph.Structure
+let normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>) : DataFlowState<'v,VertexState<'d>> * Changes<'v,'d> =
+    let dag = graph.Structure
     let state, changes = // adding missing vertex states 
         dag.TopoFold(fun (state:DataFlowState<'v,VertexState<'d>>,changes) v _ -> 
             match state.TryFind v with
             | Some _ -> state,changes
             | None -> 
-                let state,changes = Changes.vertexAdded (state,changes) v (MdMap.scalar VertexState.Unassigned)
-                buildVertexState (smState.Graph, state, changes) v
-            ) (smState.Status, noChanges)
+                let state,changes = Changes.add (state,changes) v (MdMap.scalar VertexState.Unassigned)
+                buildVertexState (graph, state, changes) v
+            ) (state, noChanges)
         
     // We should start methods, if possible
     let state,changes = 
@@ -364,6 +383,374 @@ let normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> (smS
                 | VertexStatus.Complete _ -> false
                 | x -> failwith (sprintf "Vertex %O.[%A] has status %O which is not allowed in an initial state" v index x))
             |>Seq.map(fun q -> (v,q))) |> Seq.concat
-        |> Seq.fold (fun (state, changes) (v,(i,_)) -> downstreamToCanStartOrIncomplete 0u (v,i) (smState.Graph, state, changes)) (state, changes)
+        |> Seq.fold (fun (state, changes) (v,(i,_)) -> downstreamToCanStartOrIncomplete 0u (v,i) (graph, state, changes)) (state, changes)
+    state, changes
 
-    { smState with Status = state; TimeIndex = 0u }, changes
+////////////////////////////////////////////////////////////////////////////
+// 
+// Transition
+//
+////////////////////////////////////////////////////////////////////////////
+
+type internal RemoteItemMergeResult =  StartItem | WaitItem
+type internal ArrayIndex = int
+
+
+/// Decreases length of the vector index to satisfy edge rank.
+let internal reduceToEdgeIndex (edge:Edge<_>) (i:VertexIndex) : VertexIndex = i |> List.ofMaxLength (edgeRank edge)
+
+/// Returns list of indices of the reduced artefect, which is a source vertex of the edge, for the target vertex item.
+/// Precondition: edge.Type is "Reduce".
+let internal enumerateReducedArtefacts (edge:Edge<_>) (i:VertexIndex) (state: DataFlowState<'v,VertexState<'d>>) : VertexIndex list option =
+    match state.TryFind edge.Source with
+    | Some svs ->
+        let r = i.Length
+        let items = svs |> MdMap.startingWith i |> MdMap.toSeq |> Seq.filter(fun (j,_) -> j.Length = r + 1) |> Seq.map(fun (j,_) -> j, List.last j) |> Seq.toList
+        let n = items |> Seq.map snd |> Seq.max
+        let set = items |> Seq.map snd |> Set.ofSeq
+        if Seq.init (n+1) (fun i -> set.Contains(i)) |> Seq.forall (fun t -> t) then Some (items |> Seq.map fst |> Seq.toList)
+        else None
+    | None -> None
+
+/// Enumerates input items of the given complete vertex item.
+/// Returns an array with an element for each input port.
+/// Each list element contains a list of:
+/// * Input edge which exposes input vertex and output port
+/// * Slice index of the input vertex
+/// * Optional array index, used if the input edge is "Scatter" and the vertex item depends on an array element.
+let internal enumerateInputs (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>) (v, i : VertexIndex) : (Edge<_> * VertexIndex * ArrayIndex option) list = 
+    graph.Structure.InEdges v
+    |> Seq.map (fun edge -> 
+        let edgeIndex = i |> reduceToEdgeIndex edge
+        match edge.Type with
+        | OneToOne _ | Collect _ -> [ edge, edgeIndex, None ]
+        | Scatter _ -> 
+            let j : ArrayIndex = List.last edgeIndex
+            [ edge, edgeIndex |> List.removeLast, Some j ]
+        | Reduce _ -> 
+            match enumerateReducedArtefacts edge edgeIndex state with
+            | Some indices -> indices |> Seq.map(fun ri -> edge, ri, None) |> Seq.toList
+            | None -> [])
+    |> List.concat
+
+let rec internal mergeRemoteItem (ri: SucceededRemoteVertexItem<'v>, items: SucceededRemoteVertexItem<'v> list) (graph:DataFlowGraph<'v>) (state: DataFlowState<'v,VertexState<'d>>, changes) : RemoteItemMergeResult * DataFlowState<'v,VertexState<'d>> * Changes<'v,'d> = 
+    let merge (vis:VertexState<'d>) (state,changes) =
+        match ri.Execution with
+        | Fetch -> 
+            let state,changes = Changes.update (state, changes) ri.Vertex ri.Slice { vis with Data = None; Status = CompleteStarted (None, ri.CompletionTime) }      
+            WaitItem, state, changes
+        | Compute ->
+            let tryInput (res,state,changes) (e:Edge<_>,slice,ai:ArrayIndex option) =
+                let q,state,changes = 
+                    match items |> List.tryFind(fun u -> u.Vertex = e.Source && u.Slice = slice) with
+                    | Some u -> mergeRemoteItem (u, items) graph (state,changes)
+                    | None -> 
+                        match tryGetStateItem state (e.Source,slice) with
+                        | Some vis when HasStatus.complete vis.Status -> StartItem, state, changes
+                        | _ -> WaitItem, state, changes
+                let q' = match res,q with WaitItem,_ | _,WaitItem -> WaitItem | _ -> StartItem
+                q', state, changes
+
+            let res,state,changes = enumerateInputs(graph, state) (ri.Vertex, ri.Slice) |> Seq.fold tryInput (StartItem, state, changes)
+            let status = match res with StartItem -> CompleteStarted (None, ri.CompletionTime) | WaitItem -> CompleteStartRequested (None)
+            let state,changes = Changes.update (state, changes) ri.Vertex ri.Slice { vis with Data = None; Status = status }      
+            WaitItem,state,changes
+
+    let mergeMissing v i vs = 
+        let vis = VertexState.Outdated 
+        let state = state |> Map.add v (vs |> MdMap.add i vis)
+        merge vis (state,changes)
+
+    match state.TryFind ri.Vertex with
+    | Some vs ->
+        match vs |> MdMap.tryFind ri.Slice with 
+        | Some vis when HasStatus.complete vis.Status -> StartItem, state, changes
+        | Some vis -> merge vis (state,changes)
+        | None -> mergeMissing ri.Vertex ri.Slice vs
+    | None -> mergeMissing ri.Vertex ri.Slice MdMap.Empty
+
+
+/// When 'v' succeeds and thus we have its output artefacts, this method updates downstream vertices so their state dimensionality corresponds to the given output.
+let internal downstreamShapeFor (outEdges: Edge<_> seq) (v, index:VertexIndex, outShape: int list) (graph:DataFlowGraph<'v>) (state: DataFlowState<'v,VertexState<'d>>, changes) = 
+    let dag = graph.Structure
+    let w = outEdges |> Seq.choose(fun e -> match e.Type with Scatter _ -> Some e.Target | _ -> None) 
+    let r = vertexRank v dag
+    let scope = Graph.toSeqSubgraph (fun u _ _ -> (vertexRank u dag) <= r) dag w |>
+                Graph.topoSort dag
+    scope |> Seq.fold(fun (state,changes) w ->
+        match w |> allInputsAssigned graph with
+        | false -> // some inputs are unassigned
+            match (w,[]) |> tryGetStateItem state with
+            | Some(wis) when wis.Status |> HasStatus.incompleteReason IncompleteReason.UnassignedInputs -> (state,changes)
+            | Some(wis) -> Changes.replace (state,changes) w (MdMap.scalar { wis with Status = Incomplete(UnassignedInputs) })
+            | None -> Changes.replace (state,changes) w (MdMap.scalar { VertexState.Unassigned with Status = Incomplete(UnassignedInputs) })
+        | true -> // all inputs are assigned
+            let getDimLength u (edgeType:ConnectionType) (outRef: OutputRef) : int option =
+                let urank = vertexRank u dag
+                if urank < r then None // doesn't depend on the target dimension
+                else if urank = r then
+                    match edgeType with
+                    | Scatter _ -> 
+                        opt {
+                            let! us = state |> Map.tryFind u
+                            let! uis = us |> MdMap.tryFind index
+                            let! data = uis.Data
+                            return! data.TryGetShape outRef
+                        }
+                    | _ -> None // doesn't depend on the target dimension
+                else // urank > r; u is vectorized for the dimension
+                    match state.[u] |> MdMap.tryGet index with
+                    | Some selection when not selection.IsScalar -> Some(selection |> MdMap.toShallowSeq |> Seq.length)
+                    | _ -> None
+                
+            let ws = state.[w]
+            match ws |> MdMap.tryGet index with
+                | Some _ ->
+                    let dimLen = 
+                        w 
+                        |> dag.InEdges 
+                        |> Seq.map (fun (inedge:Edge<_>) -> getDimLength inedge.Source inedge.Type inedge.OutputRef) 
+                        |> Seq.fold(fun (dimLen:(int*int) option) (inDimLen:int option) ->
+                            match dimLen, inDimLen with
+                            | Some(minDim,maxDim), Some(inDimLen) -> Some(min minDim inDimLen, max maxDim inDimLen)
+                            | Some(dimLen), None -> Some(dimLen)
+                            | None, Some(inDimLen) -> Some(inDimLen, inDimLen)
+                            | None, None -> None) None
+                    let wis = match dimLen with
+                                | Some (minDim,maxDim) -> outdatedItems maxDim (fun i -> if i < minDim then VertexState.Outdated else VertexState.Unassigned)
+                                | None -> failwith "Unexpected case: the vertex should be downstream of the succeeded vector vertex"
+                    Changes.replace (state,changes) w (ws |> MdMap.set index wis)
+                | None -> (state,changes) // doesn't depend on the target dimension
+        ) (state,changes)
+
+
+/// When 'v' succeeds and thus we have its output artefacts, this method updates downstream vertices so their state dimensionality corresponds to the given output.
+let internal downstreamShape (v, index:VertexIndex, outShape: int list) (graph:DataFlowGraph<'v>) (state: DataFlowState<'v,VertexState<'d>>, changes) = 
+    downstreamShapeFor (v |> graph.Structure.OutEdges) (v,index,outShape) graph (state,changes)
+
+/// Rebuilds shapes of vsrc and its downstream when vsrc is invalidated as a whole and becomes incomplete
+/// (connect/disconnect).
+let internal updateStatuses (vsrc) (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>,changes:Changes<'v,'d>) =
+    let dag = graph.Structure
+    let deps = Graph.toSeqSubgraph (fun v (inedges:Lazy<Edge<_> seq>) _ -> false) dag (seq{ yield vsrc }) |> topoSort dag
+    deps |> Seq.fold(fun (s,c) v -> buildVertexState (graph,s,c) v) (state,changes)
+
+type DeferredResponse = unit->unit
+let internal noResponse() = ()
+let internal response<'a> (r:ReplyChannel<'a>) (v:Response<'a>) : DeferredResponse = fun () -> r(v)
+
+/// Makes a single execution step by evolving the given state in response to a message.
+let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> IVertexData> time (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>) (msg:Message<'v,'d>) = // : (State*Changes*DeferredResponse)
+    Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, "Message received: {0}", msg)
+    match msg with
+    | RemoteSucceeded (tv, remotes) ->
+        let tr = remotes |> List.find(fun rvi -> rvi.Vertex = tv) 
+        let res,state,changes = mergeRemoteItem (tr, remotes) graph (state,noChanges)
+        let state,changes = downstreamShape (tv, tr.Slice, tr.OutputShape) graph (state, changes)
+        let state,changes = downstreamVertices (tv, tr.Slice) (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToCanStartOrIncomplete time vi (graph,s,c)) (state,changes)
+        
+        Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, sprintf "RemoteSucceeded: %O with state %O" changes state)
+        (graph,state),changes,noResponse
+        
+    | Alter(toDisconnect,toRemove,toMerge,toConnect,replyChannel) ->
+        try
+            // Disconnecting existing vertices
+            let doDisconnect (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>,changes:Changes<'v,'d>) ((v,inpRef):InputPort<'v>,source:OutputPort<'v> option) =                
+                let graph = 
+                    match source with
+                    | None -> 
+                        Trace.StateMachine.TraceInformation("Connection to {0}.[{1}] is removed", v.ToString(), inpRef)
+                        graph.Disconnect (v,inpRef)                                                                                      
+                    | Some(sv, outref) -> 
+                        Trace.StateMachine.TraceInformation("Connection to {0}.[{1}] from {2}.[{3}] is removed", v.ToString(), inpRef, sv.ToString(), outref) 
+                        graph.Disconnect (v,inpRef, sv,outref) 
+                
+                let state,changes = updateStatuses v (graph,state,changes)
+                let state,changes = state.[v] |> MdMap.toSeq |> Seq.fold (fun (s,c) (i, _) -> downstreamToCanStartOrIncomplete time (v,i) (graph,s,c) |> Changes.vertexInputChanged v) (state,changes)
+                graph,state,changes
+
+            let graph,state,changes = toDisconnect |> List.fold doDisconnect (graph,state,noChanges)
+            
+            // Remove existing vertices
+            let doRemove (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>,changes:Changes<'v,'d>) (v:'v, strategy: RemoveStrategy) =
+                match graph.TryRemove(v) with // None, if v has downstream vertices
+                    | Some graph ->
+                        Trace.StateMachine.TraceInformation("Vertex {0} removed", v.ToString())                    
+                        let state, changes = Changes.remove (state, changes) v
+                        graph,state,changes
+                    | None -> 
+                        Trace.StateMachine.TraceEvent(Trace.Event.Error, 0, sprintf "Vertex %s cannot be removed because it has dependent vertices" (v.ToString()))
+                        match strategy with
+                        | FailIfHasDependencies -> failwith (sprintf "Vertex %s cannot be removed because it has dependent vertices" (v.ToString()))
+                        | DontRemoveIfHasDependencies -> graph,state,changes
+
+            let graph,state,changes = toRemove |> List.fold doRemove (graph,state,changes)
+
+            // Merge with another work
+            let graph = DataFlowGraph(graph.Structure.Combine((fst toMerge).Structure))
+            let mergeState, _ = normalize toMerge
+            let state,changes = mergeState |> Map.fold(fun (state,changes) v vs -> Changes.add (state,changes) v vs) (state,changes)
+
+            // Connect vertices
+            let doConnect (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>,changes) (c:AlterConnection<'v>) =
+                let v, graph = 
+                    match c with 
+                    | ItemToItem (t,s) -> fst t, graph.Connect t s
+                    | ItemToArray (t,s) -> fst t, graph.ConnectItem t s
+                    
+                // Possible optimization: in certain cases we now that shape of vertex state doesn't change:
+                // e.g. if input rank is 0
+                let state,changes = updateStatuses v (graph,state,changes) // rank can be same as before connection, but still length of a dimension can be different
+                let state,changes = state.[v] |> MdMap.toSeq |> Seq.fold (fun (s,c) (i, _) -> downstreamToCanStartOrIncomplete time (v,i) (graph,s,c) |> Changes.vertexInputChanged v) (state,changes)
+                graph,state,changes
+
+            let graph,state,changes = toConnect |> List.fold doConnect (graph,state,changes) 
+            (graph,state),changes, response replyChannel (Success())
+        with exn -> 
+            Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Error, 0, "Failed to alter the graph: {0}", exn.ToString())
+            (graph,state),noChanges, response replyChannel (Response.Exception(exn))
+
+    | Start(v, itemRef, replyChannel) -> 
+        match state.TryFind(v) with 
+        | None -> (graph, state), noChanges, response replyChannel (Response.Success(false))
+        | Some(vs) -> 
+            let canStart vis = 
+                let checkTime time = 
+                    match itemRef with
+                    | Some (_,Some(expTime)) -> expTime = time
+                    | _ -> true
+                match vis.Status with
+                | ExecutionStatus.CanStart time -> checkTime time
+                | ExecutionStatus.Complete (k, shape) (*| ExecutionStatus.CompleteStartRequested (iteration=k) *)->
+                    if IsOutputPartial vis then not(k.IsSome) // "Transient iterative methods are not yet supported"
+                    else k.IsSome // It is a non-transient completed method, if it is iterative we resume iterations
+                | _ -> false
+
+
+            let startItem (state,changes) (index, vis) = 
+                match vis.Status with
+                | ExecutionStatus.CanStart t ->
+                    Trace.StateMachine.TraceInformation("Method [{0}@{1}] is started", v, index)
+                    modifyAt (state, changes) v index ({ vis with Status = ExecutionStatus.Started(time) })
+
+                | ExecutionStatus.Complete (k, shape) (*| ExecutionStatus.CompleteStartRequested (iteration=k) *)->
+                    if IsOutputPartial vis then
+                        if k.IsSome then failwith "Transient iterative methods are not yet supported"
+                        let inputs = getInputsSnapshot graph state (v,index)
+                        if inputs |> Array.forall isValidInput then
+                            Trace.StateMachine.TraceInformation("Transient method [{0}@{1}] is started", v, index)
+                            modifyAt (state, changes) v index ({ vis with Status = ExecutionStatus.CompleteStarted(None,shape,time) })
+                        // Else some input vertex is also transient
+                        else 
+                            Trace.StateMachine.TraceInformation("Method [{0}@{1}] will be started when its input transient method succeeds", v, index)
+                            startTransient time (v,index) graph (state, changes)
+                    else // It is a non-transient completed method
+                        // if it is iterative we resume iterations
+                        match vis.Status with
+                        | ExecutionStatus.Complete (Some iteration, shape) -> 
+                            Trace.StateMachine.TraceInformation("Iterative method [{0}@{1}] is resumed from {2} iteration", v, index, iteration)
+                            modifyAt (state, changes) v index ({ vis with Status = ExecutionStatus.Continues (iteration,shape,time)})
+                        | _ -> state, changes
+                | _ -> failwith "Cannot start a method which is not in state 'CanStart'"
+
+            let items = 
+                match itemRef with
+                | Some(index, time) -> // start individual method 
+                    match vs.TryGetItem index with
+                    | Some(vis) -> [ index, vis ]
+                    | None -> List.empty // vertex not found
+                | None -> // start all methods of the vertex
+                    vs.ToSeq() |> Seq.toList
+
+            match items |> Seq.map snd |> Seq.forall canStart with
+            | true ->
+                let state,changes = items |> Seq.fold startItem (state,noChanges)
+                (graph,state), changes, response replyChannel (Response.Success(true))
+            | false -> 
+                (graph,state), noChanges, response replyChannel (Response.Success(false))
+
+    | Stop(v) ->
+        match state.TryFind(v) with 
+        | None -> (graph, state), noChanges, noResponse
+        | Some(vs) -> 
+            let state,changes = vs.ToSeq() |> Seq.fold(fun (state,changes) (index, vis) -> 
+                                match vis.Status with
+                                | ExecutionStatus.Started _ ->
+                                    downstreamToIncomplete (v, index) (graph, state, changes) IncompleteReason.Stopped
+
+                                | ExecutionStatus.Continues (k,shape, _) ->
+                                    modifyAt (state,changes) v index { vis with Status = ExecutionStatus.Complete (Some k,shape)}
+
+                                | _ ->  Trace.StateMachine.TraceInformation("Vertex [{0}@{1}] is not started and therefore cannot be stopped", v, index)
+                                        state,changes) (state, noChanges)
+            (graph, state), changes, noResponse
+
+    | Failed(v, index, failure, expectedStartTime) ->
+        match (v, index) |> tryGetStateItem state with 
+        | None -> (graph, state), noChanges, noResponse // message is obsolete
+        | Some(vis) ->
+            match vis.Status with
+            | ExecutionStatus.Started startTime 
+            | ExecutionStatus.Continues (_,_,startTime) when startTime = expectedStartTime ->                    
+                Trace.StateMachine.TraceInformation("Method [{0}@{1}] failed: {2}", v, index, failure)
+                let state, changes = downstreamToIncomplete (v,index) (graph,state,noChanges) (ExecutionFailed(failure))
+                (graph, state), changes, noResponse
+            | ExecutionStatus.CompleteStarted (k,shape,startTime) when startTime = expectedStartTime ->
+                Trace.StateMachine.TraceEvent(Trace.Event.Error, 0, "Transient method [{0}@{1}] failed to re-compute: {2}", v, index, failure)
+                let state,changes = modifyAt (state, noChanges) v index { vis with Status = ExecutionStatus.Complete (k,shape) }
+                (graph, state), changes, noResponse
+            | _ -> 
+                Trace.StateMachine.TraceEvent(Trace.Event.Verbose, 0, sprintf "Message 'failed' is ignored in the vertex status %O" vis.Status)
+                (graph, state), noChanges, noResponse
+                
+
+    | Succeeded(v, index, final, output, expectedStartTime) -> 
+        match (v, index) |> tryGetStateItem state with 
+        | None -> (graph, state), noChanges, noResponse // message is obsolete
+        | Some(vis) ->
+            let trace() = Trace.StateMachine.TraceInformation("Method [{0}@{1}] {2}succeeded", v, index, if final then "" else "iteration ")
+            let changes:Map<'v,VertexChanges> = noChanges
+            let shape = lazy( buildShape output ) // Each list item contains number of elements in a corresponding output array, or zero, if it is not an array.
+
+            let state, changes = 
+                match vis.Status with
+                | ExecutionStatus.Started startTime when startTime = expectedStartTime ->
+                    trace()                        
+                    let state,changes = match final with
+                                        | true  -> modifyAt (state, changes) v index {vis with Output = Full(output); Status = ExecutionStatus.Complete (None,shape.Value)}
+                                        | false -> modifyAt (state, changes) v index {vis with Output = Full(output); Status = ExecutionStatus.Continues (1,shape.Value, startTime)}
+                    let state,changes = downstreamShape (v, index, shape.Value) graph (state, changes)
+                    downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToCanStartOrIncomplete time vi (graph,s,c)) (state,changes)
+
+                | ExecutionStatus.Continues (k, shapeLast, startTime) when startTime = expectedStartTime ->
+                    trace()                        
+                    match final with
+                    | true -> 
+                        modifyAt (state, changes) v index {vis with Status = ExecutionStatus.Complete (Some k, shapeLast)}
+                    | false -> 
+                        Trace.StateMachine.TraceInformation("Method [{0}@{1}] continues with iteration {2}", v, index, k+1)
+                        
+                        let affectedEdges = getAffectedDependencies (v, index, vis) output graph
+                        
+                        let state,changes = modifyAt (state,changes) v index {vis with Output = Full(output); Status = ExecutionStatus.Continues (k+1, shape.Value, startTime)}
+                        let state,changes = if shape.Value <> shapeLast then downstreamShape (v, index, shape.Value) graph (state, changes) else state,changes
+
+                        downstreamVerticesFor affectedEdges index (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToCanStartOrIncomplete time vi (graph,s,c)) (state,changes)
+
+                | ExecutionStatus.CompleteStarted (k, shape, startTime) when startTime = expectedStartTime ->
+                    trace()                        
+                    let state,changes = modifyAt (state, noChanges) v index { vis with Output = Full(output); Status = ExecutionStatus.Complete (k,shape) }
+
+                    downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (state,changes) (v,i) ->  
+                        match state.[v].TryGetItem i with
+                        | None -> (state,changes) // inputs unassigned  
+                        | Some (vis) ->
+                            if not (IsUpToDate vis) then downstreamToCanStartOrIncomplete time (v,i) (graph, state, changes)
+                            else match vis.Status with | ExecutionStatus.CompleteStartRequested (k,shape) -> // transient dependent method waits to start
+                                                            Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 1, "Starting transient method {0}@{1}...", v, i)
+                                                            modifyAt (state, changes) v i { vis with Status = ExecutionStatus.CompleteStarted (k, shape, time)}
+                                                        | _ -> state,changes) (state,changes)
+                | _ -> 
+                    Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, sprintf "Message 'succeeded' is ignored in the vertex status %O" vis.Status)
+                    (state,changes)
+            (graph, state), changes, noResponse
