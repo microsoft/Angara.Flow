@@ -45,6 +45,7 @@
   <ItemGroup>
     <Compile Include="AssemblyInfo.fs" />
     <Compile Include="Trace.fs" />
+    <Compile Include="Option.fs" />
     <Compile Include="List.fs" />
     <Compile Include="MdMap.fsi" />
     <Compile Include="MdMap.fs" />

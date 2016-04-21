@@ -539,6 +539,71 @@ type DeferredResponse = unit->unit
 let internal noResponse() = ()
 let internal response<'a> (r:ReplyChannel<'a>) (v:Response<'a>) : DeferredResponse = fun () -> r(v)
 
+/// Returns true, if the state contains an artefact for the given outRef.
+let internal hasOutput outRef (vs:VertexState<'d>) =
+    match vs.Data with
+    | Some d -> d.Contains outRef
+    | None -> false
+
+/// Returns true, for the given vertex state there is a missing output artefact.
+let internal isOutputPartial<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> IVertexData> (v:'v) (vs:VertexState<'d>) =
+    v.Outputs |> Seq.mapi (fun i _ -> hasOutput i vs) |> Seq.contains false
+
+/// Returns true, if the state contains data required for a single input of a vertex `v` at `index` having given `input` as
+/// input edges of a single method input. 
+/// Returns false, if there are no input edges or some of them has missing artefact in the state.
+let internal isInputAvailable (graph:DataFlowGraph<'v>) (state: DataFlowState<'v,VertexState<'d>>) (v: 'v) index (input: Edge<'v> seq) =
+    let inputHasOutput (edge:Edge<'v>) i =
+        match state |> Map.tryFind edge.Source with
+        | None -> false
+        | Some ws ->
+            match ws |> MdMap.tryFind i with
+            | None -> false
+            | Some wis -> wis |> hasOutput edge.OutputRef 
+    // Sames as inputHasOutput, but "i" has rank one less than rank of the source vertex,
+    // therefore result is an array of artefacts for all available indices complementing "i".
+    let reducedInputHasOutputs (edge:Edge<'v>) (i:VertexIndex) =
+       match state |> Map.tryFind edge.Source with
+        | None -> false
+        | Some ws ->
+            let r = i.Length
+            let items = 
+                ws 
+                |> MdMap.startingWith i 
+                |> MdMap.toSeq
+                |> Seq.filter(fun (i,_) -> i.Length = r + 1) 
+                |> Seq.map(fun (j,vis) -> List.last j, vis |> hasOutput edge.OutputRef)
+                |> Seq.toList
+            if items |> List.forall (fun (_,hasOutput) -> hasOutput) then
+                let map = items |> Map.ofList
+                let n = items |> Seq.map fst |> Seq.max
+                Seq.init (n+1) (fun i -> Map.containsKey i map) |> Seq.contains false |> not
+            else false
+
+    match List.ofSeq input with
+    | [] -> false
+
+    | edge :: [] -> // single input edge
+        let edgeIndex = index |> reduceToEdgeIndex edge
+        match edge.Type with
+        | OneToOne _ | Collect _ -> inputHasOutput edge edgeIndex
+        | Scatter _ -> inputHasOutput edge (edgeIndex |> List.removeLast)
+        | Reduce _ -> reducedInputHasOutputs edge edgeIndex
+
+    | edges -> // All multiple input edges have type "Collect" due to type check on connection
+        edges
+        |> Seq.map (fun e -> inputHasOutput e (index |> reduceToEdgeIndex e))
+        |> Seq.contains false
+        |> not
+
+/// Returns true, if the state contains artefacts for all of the vertex `v` inputs at the given slice `index`.
+let internal areInputsAvailable (graph:DataFlowGraph<'v>) (state: DataFlowState<'v,VertexState<'d>>) (v: 'v) index =
+    graph.Structure.InEdges v
+    |> Seq.groupBy (fun e -> e.InputRef)
+    |> Seq.map(fun (_, inEdges) -> isInputAvailable graph state v index inEdges)
+    |> Seq.contains false
+    |> not
+
 /// Makes a single execution step by evolving the given state in response to a message.
 let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> IVertexData> time (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>) (msg:Message<'v,'d>) = // : (State*Changes*DeferredResponse)
     Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, "Message received: {0}", msg)
@@ -614,53 +679,52 @@ let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> 
         match state.TryFind(v) with 
         | None -> (graph, state), noChanges, response replyChannel (Response.Success(false))
         | Some(vs) -> 
-            let canStart vis = 
+            let canStart (vis : VertexState<'d>) = 
                 let checkTime time = 
                     match itemRef with
                     | Some (_,Some(expTime)) -> expTime = time
                     | _ -> true
                 match vis.Status with
-                | ExecutionStatus.CanStart time -> checkTime time
-                | ExecutionStatus.Complete (k, shape) (*| ExecutionStatus.CompleteStartRequested (iteration=k) *)->
-                    if IsOutputPartial vis then not(k.IsSome) // "Transient iterative methods are not yet supported"
+                | VertexStatus.CanStart time -> checkTime time
+                | VertexStatus.Complete k (*| VertexStatus.CompleteStartRequested (iteration=k) *) ->
+                    if isOutputPartial v vis then not(k.IsSome) // "Transient iterative methods are not yet supported"
                     else k.IsSome // It is a non-transient completed method, if it is iterative we resume iterations
                 | _ -> false
 
 
-            let startItem (state,changes) (index, vis) = 
+            let startItem (state,changes) (index, vis : VertexState<'d>) = 
                 match vis.Status with
-                | ExecutionStatus.CanStart t ->
-                    Trace.StateMachine.TraceInformation("Method [{0}@{1}] is started", v, index)
-                    modifyAt (state, changes) v index ({ vis with Status = ExecutionStatus.Started(time) })
+                | VertexStatus.CanStart t ->
+                    Trace.StateMachine.TraceInformation("Method {0}.[{1}] is started", v, index)
+                    Changes.update (state, changes) v index ({ vis with Status = VertexStatus.Started(0, time) })
 
-                | ExecutionStatus.Complete (k, shape) (*| ExecutionStatus.CompleteStartRequested (iteration=k) *)->
-                    if IsOutputPartial vis then
+                | VertexStatus.Complete k (*| VertexStatus.CompleteStartRequested (iteration=k) *)->
+                    if isOutputPartial v vis then
                         if k.IsSome then failwith "Transient iterative methods are not yet supported"
-                        let inputs = getInputsSnapshot graph state (v,index)
-                        if inputs |> Array.forall isValidInput then
-                            Trace.StateMachine.TraceInformation("Transient method [{0}@{1}] is started", v, index)
-                            modifyAt (state, changes) v index ({ vis with Status = ExecutionStatus.CompleteStarted(None,shape,time) })
+                        if areInputsAvailable graph state v index then
+                            Trace.StateMachine.TraceInformation("Transient method {0}.[{1}] is started", v, index)
+                            Changes.update (state, changes) v index ({ vis with Status = VertexStatus.CompleteStarted(None,time) })
                         // Else some input vertex is also transient
                         else 
-                            Trace.StateMachine.TraceInformation("Method [{0}@{1}] will be started when its input transient method succeeds", v, index)
+                            Trace.StateMachine.TraceInformation("Method {0}.[{1}] will be started when its input transient method succeeds", v, index)
                             startTransient time (v,index) graph (state, changes)
                     else // It is a non-transient completed method
                         // if it is iterative we resume iterations
                         match vis.Status with
-                        | ExecutionStatus.Complete (Some iteration, shape) -> 
-                            Trace.StateMachine.TraceInformation("Iterative method [{0}@{1}] is resumed from {2} iteration", v, index, iteration)
-                            modifyAt (state, changes) v index ({ vis with Status = ExecutionStatus.Continues (iteration,shape,time)})
+                        | VertexStatus.Complete (Some iteration) -> 
+                            Trace.StateMachine.TraceInformation("Iterative method {0}.[{1}] is resumed from iteration {2}", v, index, iteration)
+                            Changes.update (state, changes) v index ({ vis with Status = VertexStatus.Started (iteration,time)})
                         | _ -> state, changes
                 | _ -> failwith "Cannot start a method which is not in state 'CanStart'"
 
             let items = 
                 match itemRef with
-                | Some(index, time) -> // start individual method 
-                    match vs.TryGetItem index with
+                | Some(index, _) -> // start individual method 
+                    match vs |> MdMap.tryFind index with
                     | Some(vis) -> [ index, vis ]
                     | None -> List.empty // vertex not found
                 | None -> // start all methods of the vertex
-                    vs.ToSeq() |> Seq.toList
+                    vs |> MdMap.toSeq |> Seq.toList
 
             match items |> Seq.map snd |> Seq.forall canStart with
             | true ->
@@ -675,13 +739,13 @@ let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> 
         | Some(vs) -> 
             let state,changes = vs.ToSeq() |> Seq.fold(fun (state,changes) (index, vis) -> 
                                 match vis.Status with
-                                | ExecutionStatus.Started _ ->
+                                | VertexStatus.Started _ ->
                                     downstreamToIncomplete (v, index) (graph, state, changes) IncompleteReason.Stopped
 
-                                | ExecutionStatus.Continues (k,shape, _) ->
-                                    modifyAt (state,changes) v index { vis with Status = ExecutionStatus.Complete (Some k,shape)}
+                                | VertexStatus.Continues (k,shape, _) ->
+                                    modifyAt (state,changes) v index { vis with Status = VertexStatus.Complete (Some k,shape)}
 
-                                | _ ->  Trace.StateMachine.TraceInformation("Vertex [{0}@{1}] is not started and therefore cannot be stopped", v, index)
+                                | _ ->  Trace.StateMachine.TraceInformation("Vertex {0}.[{1}] is not started and therefore cannot be stopped", v, index)
                                         state,changes) (state, noChanges)
             (graph, state), changes, noResponse
 
@@ -690,14 +754,14 @@ let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> 
         | None -> (graph, state), noChanges, noResponse // message is obsolete
         | Some(vis) ->
             match vis.Status with
-            | ExecutionStatus.Started startTime 
-            | ExecutionStatus.Continues (_,_,startTime) when startTime = expectedStartTime ->                    
-                Trace.StateMachine.TraceInformation("Method [{0}@{1}] failed: {2}", v, index, failure)
+            | VertexStatus.Started startTime 
+            | VertexStatus.Continues (_,_,startTime) when startTime = expectedStartTime ->                    
+                Trace.StateMachine.TraceInformation("Method {0}.[{1}] failed: {2}", v, index, failure)
                 let state, changes = downstreamToIncomplete (v,index) (graph,state,noChanges) (ExecutionFailed(failure))
                 (graph, state), changes, noResponse
-            | ExecutionStatus.CompleteStarted (k,shape,startTime) when startTime = expectedStartTime ->
-                Trace.StateMachine.TraceEvent(Trace.Event.Error, 0, "Transient method [{0}@{1}] failed to re-compute: {2}", v, index, failure)
-                let state,changes = modifyAt (state, noChanges) v index { vis with Status = ExecutionStatus.Complete (k,shape) }
+            | VertexStatus.CompleteStarted (k,shape,startTime) when startTime = expectedStartTime ->
+                Trace.StateMachine.TraceEvent(Trace.Event.Error, 0, "Transient method {0}.[{1}] failed to re-compute: {2}", v, index, failure)
+                let state,changes = modifyAt (state, noChanges) v index { vis with Status = VertexStatus.Complete (k,shape) }
                 (graph, state), changes, noResponse
             | _ -> 
                 Trace.StateMachine.TraceEvent(Trace.Event.Verbose, 0, sprintf "Message 'failed' is ignored in the vertex status %O" vis.Status)
@@ -708,47 +772,47 @@ let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> 
         match (v, index) |> tryGetStateItem state with 
         | None -> (graph, state), noChanges, noResponse // message is obsolete
         | Some(vis) ->
-            let trace() = Trace.StateMachine.TraceInformation("Method [{0}@{1}] {2}succeeded", v, index, if final then "" else "iteration ")
+            let trace() = Trace.StateMachine.TraceInformation("Method {0}.[{1}] {2}succeeded", v, index, if final then "" else "iteration ")
             let changes:Map<'v,VertexChanges> = noChanges
             let shape = lazy( buildShape output ) // Each list item contains number of elements in a corresponding output array, or zero, if it is not an array.
 
             let state, changes = 
                 match vis.Status with
-                | ExecutionStatus.Started startTime when startTime = expectedStartTime ->
+                | VertexStatus.Started startTime when startTime = expectedStartTime ->
                     trace()                        
                     let state,changes = match final with
-                                        | true  -> modifyAt (state, changes) v index {vis with Output = Full(output); Status = ExecutionStatus.Complete (None,shape.Value)}
-                                        | false -> modifyAt (state, changes) v index {vis with Output = Full(output); Status = ExecutionStatus.Continues (1,shape.Value, startTime)}
+                                        | true  -> modifyAt (state, changes) v index {vis with Output = Full(output); Status = VertexStatus.Complete (None,shape.Value)}
+                                        | false -> modifyAt (state, changes) v index {vis with Output = Full(output); Status = VertexStatus.Continues (1,shape.Value, startTime)}
                     let state,changes = downstreamShape (v, index, shape.Value) graph (state, changes)
                     downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToCanStartOrIncomplete time vi (graph,s,c)) (state,changes)
 
-                | ExecutionStatus.Continues (k, shapeLast, startTime) when startTime = expectedStartTime ->
+                | VertexStatus.Continues (k, shapeLast, startTime) when startTime = expectedStartTime ->
                     trace()                        
                     match final with
                     | true -> 
-                        modifyAt (state, changes) v index {vis with Status = ExecutionStatus.Complete (Some k, shapeLast)}
+                        modifyAt (state, changes) v index {vis with Status = VertexStatus.Complete (Some k, shapeLast)}
                     | false -> 
-                        Trace.StateMachine.TraceInformation("Method [{0}@{1}] continues with iteration {2}", v, index, k+1)
+                        Trace.StateMachine.TraceInformation("Method {0}.[{1}] continues with iteration {2}", v, index, k+1)
                         
                         let affectedEdges = getAffectedDependencies (v, index, vis) output graph
                         
-                        let state,changes = modifyAt (state,changes) v index {vis with Output = Full(output); Status = ExecutionStatus.Continues (k+1, shape.Value, startTime)}
+                        let state,changes = modifyAt (state,changes) v index {vis with Output = Full(output); Status = VertexStatus.Continues (k+1, shape.Value, startTime)}
                         let state,changes = if shape.Value <> shapeLast then downstreamShape (v, index, shape.Value) graph (state, changes) else state,changes
 
                         downstreamVerticesFor affectedEdges index (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToCanStartOrIncomplete time vi (graph,s,c)) (state,changes)
 
-                | ExecutionStatus.CompleteStarted (k, shape, startTime) when startTime = expectedStartTime ->
+                | VertexStatus.CompleteStarted (k, shape, startTime) when startTime = expectedStartTime ->
                     trace()                        
-                    let state,changes = modifyAt (state, noChanges) v index { vis with Output = Full(output); Status = ExecutionStatus.Complete (k,shape) }
+                    let state,changes = modifyAt (state, noChanges) v index { vis with Output = Full(output); Status = VertexStatus.Complete (k,shape) }
 
                     downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (state,changes) (v,i) ->  
                         match state.[v].TryGetItem i with
                         | None -> (state,changes) // inputs unassigned  
                         | Some (vis) ->
                             if not (IsUpToDate vis) then downstreamToCanStartOrIncomplete time (v,i) (graph, state, changes)
-                            else match vis.Status with | ExecutionStatus.CompleteStartRequested (k,shape) -> // transient dependent method waits to start
+                            else match vis.Status with | VertexStatus.CompleteStartRequested (k,shape) -> // transient dependent method waits to start
                                                             Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 1, "Starting transient method {0}@{1}...", v, i)
-                                                            modifyAt (state, changes) v i { vis with Status = ExecutionStatus.CompleteStarted (k, shape, time)}
+                                                            modifyAt (state, changes) v i { vis with Status = VertexStatus.CompleteStarted (k, shape, time)}
                                                         | _ -> state,changes) (state,changes)
                 | _ -> 
                     Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, sprintf "Message 'succeeded' is ignored in the vertex status %O" vis.Status)
