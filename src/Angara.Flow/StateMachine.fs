@@ -737,16 +737,18 @@ let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> 
         match state.TryFind(v) with 
         | None -> (graph, state), noChanges, noResponse
         | Some(vs) -> 
-            let state,changes = vs.ToSeq() |> Seq.fold(fun (state,changes) (index, vis) -> 
-                                match vis.Status with
-                                | VertexStatus.Started _ ->
-                                    downstreamToIncomplete (v, index) (graph, state, changes) IncompleteReason.Stopped
-
-                                | VertexStatus.Continues (k,shape, _) ->
-                                    modifyAt (state,changes) v index { vis with Status = VertexStatus.Complete (Some k,shape)}
-
-                                | _ ->  Trace.StateMachine.TraceInformation("Vertex {0}.[{1}] is not started and therefore cannot be stopped", v, index)
-                                        state,changes) (state, noChanges)
+            let state,changes = 
+                vs 
+                |> MdMap.toSeq
+                |> Seq.fold(fun (state,changes) (index, vis) -> 
+                    match vis.Status with
+                    | VertexStatus.Started (k,_) when k = 0 ->
+                        downstreamToIncomplete (v, index) (graph, state, changes) IncompleteReason.Stopped
+                    | VertexStatus.Started (k,_) ->
+                        Changes.update (state,changes) v index { vis with Status = VertexStatus.Complete (Some k)}
+                    | _ ->  
+                        Trace.StateMachine.TraceInformation("Vertex {0}.[{1}] is not started and therefore cannot be stopped", v, index)
+                        state,changes) (state, noChanges)
             (graph, state), changes, noResponse
 
     | Failed(v, index, failure, expectedStartTime) ->
