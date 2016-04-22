@@ -249,8 +249,8 @@ let isReachableFrom (target: 'v) (source: 'v) (g: DirectedAcyclicGraph<'v,'e>) :
 
 [<Interface>]
 type IVertex =
-    abstract member Inputs : System.Type[]
-    abstract member Outputs : System.Type[]
+    abstract member Inputs : System.Type list
+    abstract member Outputs : System.Type list
 
 type InputRef       = int
 type InputPort<'v> = 'v * InputRef

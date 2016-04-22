@@ -87,8 +87,8 @@ val isReachableFrom : target:'v -> source:'v -> g:DirectedAcyclicGraph<'v,'e> ->
 /// and a fixed number of typed outputs corresponding to the method result type.
 [<Interface>]
 type IVertex =
-    abstract member Inputs : System.Type []
-    abstract member Outputs : System.Type []
+    abstract member Inputs : System.Type list
+    abstract member Outputs : System.Type list
 
 /// zero-based index into an array of method inputs
 type InputRef = int
