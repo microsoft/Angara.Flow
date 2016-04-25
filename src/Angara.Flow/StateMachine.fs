@@ -44,6 +44,10 @@ type IVertexData =
     abstract member Contains : OutputRef -> bool
     abstract member TryGetShape : OutputRef -> int option
 
+[<Interface>]
+type IOutputsMatch<'d when 'd :> IVertexData> = 
+    abstract Match : 'd -> OutputRef -> bool
+
 type VertexState<'d when 'd:>IVertexData>  = {
     Status : VertexStatus
     Data : 'd option
@@ -604,24 +608,25 @@ let internal areInputsAvailable (graph:DataFlowGraph<'v>) (state: DataFlowState<
     |> Seq.contains false
     |> not
 
-let internal getAffectedDependencies (v, index : VertexIndex, vis : VertexState<'d>) (output : 'd) (graph : DataFlowGraph<_>) : Edge<_> array =
-    match vis.Output with 
-    | Full newOutput -> 
-        let edges = graph.Structure.OutEdges v |> Seq.toArray
-        let affectedEdges = 
-            Seq.zip newOutput output 
-            |> Seq.mapi (fun i (a, b) -> 
-                let eq = Utils.fsEqual a b 
-                if eq then 
-                    Trace.StateMachine.TraceEvent(Trace.Event.Verbose, 3, "Method [{0}@{1}], output {2} is identical to previous output; downstream is unaffected", v, index, i)
-                    Seq.empty
-                else edges |> Seq.filter (fun e -> e.OutputRef = i))
-            |> Seq.concat |> Seq.toArray
-        affectedEdges
-    | Partial _ -> graph.Structure.OutEdges v |> Seq.toArray
+
+/// Returns an array of some of the output edges for the given vertex and index, such that these edges
+/// go from the vertex outputs that are changed if compare their current state `vis` and the given `data`.
+let internal getAffectedDependencies<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> IVertexData and 'd :> IOutputsMatch<'d>>  (v : 'v, index : VertexIndex, vis : VertexState<'d>) (data : 'd) (graph : DataFlowGraph<_>) : Edge<_> array =
+    let edges = graph.Structure.OutEdges v |> Seq.toArray
+    match vis.Data with
+    | Some output ->
+        seq{ 
+            for i in 0 .. v.Outputs.Length-1 do
+                if output.Match data i then
+                    Trace.StateMachine.TraceEvent(Trace.Event.Verbose, 3, "Method {0}.[{1}], output {2} matches previous output; downstream is unaffected", v, index, i)
+                    yield Seq.empty
+                else
+                    yield edges |> Seq.filter (fun e -> e.OutputRef = i)
+        } |> Seq.concat |> Seq.toArray       
+    | None -> edges
 
 /// Makes a single execution step by evolving the given state in response to a message.
-let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> IVertexData> time (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>) (msg:Message<'v,'d>) = // : (State*Changes*DeferredResponse)
+let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> IVertexData and 'd :> IOutputsMatch<'d>> time (graph:DataFlowGraph<'v>, state: DataFlowState<'v,VertexState<'d>>) (msg:Message<'v,'d>) = // : (State*Changes*DeferredResponse)
     Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, "Message received: {0}", msg)
     match msg with
     | RemoteSucceeded (tv, remotes) ->
@@ -813,26 +818,30 @@ let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> 
                     | false -> 
                         Trace.StateMachine.TraceInformation("Method {0}.[{1}] completed iteration {2} and continues", v, index, k)
                         
+                        // Since k > 0 then the previous iteration already moved the dependent vertices to a proper state,
+                        // and if some outputs are not changed since that iteration we can leave them as they are.
                         let affectedEdges = getAffectedDependencies (v, index, vis) output graph
                         
                         let state,changes = Changes.update (state,changes) v index {vis with Data = Some output; Status = VertexStatus.Started (k+1, startTime)}
-                        let state,changes = if outputShape.Value <> shapeLast then downstreamShape (v, index, outputShape.Value) graph (state, changes) else state,changes
+                        let state,changes = downstreamShape (v, index, outputShape.Value) graph (state, changes)
 
                         downstreamVerticesFor affectedEdges index (graph,state) |> Seq.fold(fun (s,c) vi ->  downstreamToCanStartOrIncomplete time vi (graph,s,c)) (state,changes)
 
-                | VertexStatus.CompleteStarted (k, shape, startTime) when startTime = expectedStartTime ->
+                | VertexStatus.CompleteStarted (k, startTime) when startTime = expectedStartTime ->
                     trace()                        
-                    let state,changes = modifyAt (state, noChanges) v index { vis with Output = Full(output); Status = VertexStatus.Complete (k,shape) }
+                    let state,changes = Changes.update (state, noChanges) v index { vis with Data = Some output; Status = VertexStatus.Complete k }
 
                     downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (state,changes) (v,i) ->  
-                        match state.[v].TryGetItem i with
+                        match state.[v] |> MdMap.tryFind i with
                         | None -> (state,changes) // inputs unassigned  
                         | Some (vis) ->
-                            if not (IsUpToDate vis) then downstreamToCanStartOrIncomplete time (v,i) (graph, state, changes)
-                            else match vis.Status with | VertexStatus.CompleteStartRequested (k,shape) -> // transient dependent method waits to start
-                                                            Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 1, "Starting transient method {0}@{1}...", v, i)
-                                                            modifyAt (state, changes) v i { vis with Status = VertexStatus.CompleteStarted (k, shape, time)}
-                                                        | _ -> state,changes) (state,changes)
+                            if not (HasStatus.upToDate vis.Status) then downstreamToCanStartOrIncomplete time (v,i) (graph, state, changes)
+                            else 
+                                match vis.Status with 
+                                | VertexStatus.CompleteStartRequested k -> // transient dependent method waits to start
+                                    Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 1, "Starting transient method {0}.[{1}]...", v, i)
+                                    Changes.update (state, changes) v i { vis with Status = VertexStatus.CompleteStarted (k, time)}
+                                | _ -> state,changes) (state,changes)
                 | _ -> 
                     Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, sprintf "Message 'succeeded' is ignored in the vertex status %O" vis.Status)
                     (state,changes)

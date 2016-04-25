@@ -60,6 +60,13 @@ type IVertexData =
     /// returns length of the array; otherwise, returns `None`.
     abstract member TryGetShape : OutputRef -> int option
 
+/// Allows to check if the output artefact matches the inner state of the object implementing this interface.
+[<Interface>]
+type IOutputsMatch<'d when 'd :> IVertexData> = 
+    /// Returns true, if both this object and the given vertex data contain the given output
+    /// and the both outputs are equal.
+    abstract Match : 'd -> OutputRef -> bool
+
 /// Keeps status and data of a vertex as part of the StateMachine state.
 type VertexState<'d when 'd:>IVertexData>  = {
     /// Keeps status of the vertex in terms of the state machine.
@@ -163,7 +170,7 @@ type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
 val normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> : DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
     
 [<Interface>]
-type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> = 
+type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData and 'd:>IOutputsMatch<'d>> = 
     inherit System.IDisposable
     abstract Start : unit -> unit
     abstract State : State<'v,'d>
