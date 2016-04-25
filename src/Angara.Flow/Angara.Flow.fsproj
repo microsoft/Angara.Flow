@@ -47,6 +47,8 @@
     <Compile Include="Trace.fs" />
     <Compile Include="Option.fs" />
     <Compile Include="List.fs" />
+    <Compile Include="Observable.fs" />
+    <Compile Include="MailboxProcessor.fs" />
     <Compile Include="MdMap.fsi" />
     <Compile Include="MdMap.fs" />
     <Compile Include="Graph.fsi" />

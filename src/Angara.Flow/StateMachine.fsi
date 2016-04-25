@@ -175,3 +175,11 @@ type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData 
     abstract Start : unit -> unit
     abstract State : State<'v,'d>
     abstract OnChanged : System.IObservable<State<'v,'d> * Changes<'v,'d>>
+
+[<Class>]
+type StateMachine =
+    /// Creates new state machine from the given initial state. 
+    /// The state machine will read messages from the `source` which must be empty unless the state machine is started.
+    /// To start the state machine, so that it will start reading and handling the messages, call `Start` method.
+    static member CreatePaused<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData and 'd:>IOutputsMatch<'d>> : 
+        source:System.IObservable<Message<'v, 'd>> -> initialState:(DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) -> IStateMachine<'v,'d>

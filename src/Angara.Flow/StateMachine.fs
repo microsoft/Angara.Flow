@@ -109,7 +109,7 @@ type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
     | RemoteSucceeded of RemoteVertexSucceeded<'v> 
 
 [<Interface>]
-type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> = 
+type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData and 'd:>IOutputsMatch<'d>> = 
     inherit System.IDisposable
     abstract Start : unit -> unit
     abstract State : State<'v,'d>
@@ -846,3 +846,58 @@ let internal transition<'v, 'd when 'v : comparison and 'v :> IVertex and 'd :> 
                     Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 0, sprintf "Message 'succeeded' is ignored in the vertex status %O" vis.Status)
                     (state,changes)
             (graph, state), changes, noResponse
+
+
+type StateMachineImpl<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData and 'd:>IOutputsMatch<'d>>(source:System.IObservable<Message<'v, 'd>>, initialState:DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) =
+    let obs = Angara.Observable.ObservableSource<State<'v,'d>*Changes<'v,'d>>()
+    let mutable agent : Angara.MailboxProcessor.ILinearizingAgent<Message<'v,'d>> option = None
+    let mutable unsubs : System.IDisposable = null
+    let mutable lastState = { Graph = fst initialState; Status = snd initialState; TimeIndex = 0u }
+        
+    let messageHandler (msg:Message<'v,'d>) (state:State<'v,'d>) = 
+        let time = state.TimeIndex + 1u
+        let (graph,status), changes, reply = transition time (state.Graph, state.Status) msg
+        let state = { Graph = graph; Status = status; TimeIndex = time }
+        lastState <- state
+        if not (changes.IsEmpty) then obs.Next(state, changes)
+        reply()
+        Angara.MailboxProcessor.AfterMessage.ContinueProcessing state
+
+    let errorHandler (exn:exn) (msg:Message<'v,'d>) state = 
+        Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Critical, 1, sprintf "Execution of the agent results in an exception %O at time %d" exn state.TimeIndex)
+        Angara.MailboxProcessor.AfterError.ContinueProcessing state
+
+    member x.OnChanged = obs.AsObservable
+        
+    member x.Start() = 
+        match agent with
+        | Some _ -> invalidOp "StateMachine is already started"
+        | None ->
+            unsubs <- source.Subscribe(fun message -> 
+                match agent with 
+                | Some agent -> agent.Post message
+                | None -> 
+                    Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Critical, 1, "A message is received before the StateMachineImpl.Start is finished")
+                    invalidOp "A message is received before the StateMachineImpl.Start is finished")
+
+            let flowState, changes = normalize initialState
+            let state = { Graph = fst initialState; Status = flowState; TimeIndex = 1u }
+            lastState <- state
+            agent <- Angara.MailboxProcessor.spawnMailboxProcessor (messageHandler, state, errorHandler) |> Option.Some
+            obs.Next (state, changes)
+
+        
+    interface IStateMachine<'v,'d> with
+        member x.OnChanged = obs.AsObservable
+        member x.Start() = x.Start()
+        member x.State = lastState
+
+        member x.Dispose() = 
+            match unsubs with null -> () | d -> d.Dispose()
+            agent |> Option.iter(fun d -> d.Dispose())
+
+[<Class>]
+type StateMachine() =
+    static member CreatePaused<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData and 'd:>IOutputsMatch<'d>> 
+        (source:System.IObservable<Message<'v, 'd>>) (initialState:DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) : IStateMachine<'v,'d> = 
+        new StateMachineImpl<'v,'d>(source, initialState) :> IStateMachine<'v,'d>
