@@ -36,7 +36,7 @@ type DirectedAcyclicGraph<'v,'e when 'v : comparison and 'e :> IEdge<'v> and 'e 
             queue.Enqueue(e.Target)
             while queue.Count > 0 do
                 let v = queue.Dequeue()
-                if v = source then failwith "Cannot add the edge because this would make a graph cyclic"
+                if v = source then invalidOp "Cannot add the edge because this would make a graph cyclic"
                 visited := (!visited).Add v
                 vertices.[v] |> List.iter (fun e -> if not ((!visited).Contains e.Target) then queue.Enqueue(e.Target))
 

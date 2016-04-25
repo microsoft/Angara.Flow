@@ -39,4 +39,11 @@ let ``Graph vertices are folded in topological order``() =
     Assert.IsTrue(result.[0] = 2 && result.[1] = 4 || result.[0] = 4 && result.[1] = 2)
     Assert.IsTrue(result.[2] = 1 && result.[3] = 3 || result.[2] = 3 && result.[3] = 1)
 
+[<Test; Category("CI")>]
+[<Timeout(1000)>]
+[<ExpectedException(typeof<InvalidOperationException>)>]
+let ``No loops are allowed``() = 
+    let g = IntDag().AddVertex(1).AddVertex(2).AddEdge(IntEdge(1,2))
+    g.AddEdge(IntEdge(2,1)) |> ignore
+
 
