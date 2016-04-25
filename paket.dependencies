@@ -1,0 +1,11 @@
+source https://nuget.org/api/v2
+
+
+group Test
+  source https://nuget.org/api/v2  
+  nuget FsCheck
+  nuget FsCheck.NUnit
+  nuget FsUnit
+  nuget Newtonsoft.Json
+  nuget NUnit ~> 2
+  nuget NUnit.Runners ~> 2
