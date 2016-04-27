@@ -144,3 +144,19 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> =
                         connections:((int * OutputRef) * (int * InputRef)) list ->
                         DataFlowGraph<'v> * Map<int,'v>
     static member Empty : DataFlowGraph<'v>
+
+
+//------------ State of an Angara flow.
+
+/// Each dataflow vertex has a non-negative rank, determined by its input edges.
+/// The vertex state is a result of multiple vertex executions,
+/// represented as multidimensional map from vertex index to execution result state, `'vs`.
+type MdVertexState<'vs> = Angara.Data.MdMap<int, 'vs>
+/// A key in the multidimensional vertex state.
+type VertexIndex = int list
+
+/// DataFlowState compliments the dependency graph
+/// to keep track of results of execution of the graph methods.
+/// The state contains both status information and methods outputs.
+type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> =
+    Map<'v, MdVertexState<'vs>>

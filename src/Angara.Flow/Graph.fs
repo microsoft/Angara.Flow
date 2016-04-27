@@ -540,3 +540,7 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
             else g.Connect (mt, snd trg) (ms, snd src)
         let g = connections |> Seq.fold f g
         (g, m)
+
+type MdVertexState<'vs> = Angara.Data.MdMap<int, 'vs>
+type VertexIndex = int list
+type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> = Map<'v, MdVertexState<'vs>>

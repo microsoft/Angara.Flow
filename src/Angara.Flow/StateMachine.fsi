@@ -1,7 +1,6 @@
 ﻿module Angara.StateMachine
 
 open Angara.Graph
-open Angara.State
 
 ////////////////////////
 //
@@ -12,7 +11,7 @@ open Angara.State
 /// Allows to represent a local linear time of the state machine.
 /// Each state transition happens at a different time index;
 /// the latter transition time index is greater than earlier transition time index.
-type TimeIndex = uint32
+type TimeIndex = uint64
 
 /// A reason why a vertex cannot be executed.
 type IncompleteReason = 
@@ -51,24 +50,8 @@ type VertexStatus =
     /// `time` keeps time index when the vertex entered this status.
     | CanStart                  of time: TimeIndex    
 
-/// Represents vertex output stored for each of the vertices as a part of the state machine state.
-[<Interface>]
-type IVertexData =
-    /// Returns a value indicating whether the data is available; if not, it should be re-evaluated.
-    abstract member Contains : OutputRef -> bool
-    /// If the data contains the given output and the output is a one-dimensional array,
-    /// returns length of the array; otherwise, returns `None`.
-    abstract member TryGetShape : OutputRef -> int option
-
-/// Allows to check if the output artefact matches the inner state of the object implementing this interface.
-[<Interface>]
-type IOutputsMatch<'d when 'd :> IVertexData> = 
-    /// Returns true, if both this object and the given vertex data contain the given output
-    /// and the both outputs are equal.
-    abstract Match : 'd -> OutputRef -> bool
-
 /// Keeps status and data of a vertex as part of the StateMachine state.
-type VertexState<'d when 'd:>IVertexData>  = {
+type VertexState<'d>  = {
     /// Keeps status of the vertex in terms of the state machine.
     Status : VertexStatus
     /// Keeps data associated with the vertex.
@@ -85,9 +68,9 @@ type VertexState<'d when 'd:>IVertexData>  = {
     static member Outdated : VertexState<'d>
 
 /// An immutable type which keeps state for the StateMachine.
-type State<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
+type State<'v,'d when 'v:comparison and 'v:>IVertex> =
     { Graph : DataFlowGraph<'v>
-      Status : DataFlowState<'v,VertexState<'d>> 
+      Status : DataFlowState<'v, VertexState<'d>> 
       TimeIndex : TimeIndex }
 
 ////////////////////////
@@ -97,7 +80,7 @@ type State<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
 ////////////////////////
 
 /// Describes changes that can occur with dataflow vertex.
-type VertexChanges<'d when 'd:>IVertexData> = 
+type VertexChanges<'d> = 
     | New of MdVertexState<VertexState<'d>>
     | Removed 
     /// Shape of a vertex state probably is changed.
@@ -105,7 +88,7 @@ type VertexChanges<'d when 'd:>IVertexData> =
     /// Some items of a vertex state are changed.
     | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     
-type Changes<'v,'d when 'v : comparison and 'd:>IVertexData> = Map<'v, VertexChanges<'d>>
+type Changes<'v,'d when 'v : comparison> = Map<'v, VertexChanges<'d>>
 
 ////////////////////////
 //
@@ -140,7 +123,8 @@ type SucceededRemoteVertexItem<'v> =
 
 type RemoteVertexSucceeded<'v> = 'v * SucceededRemoteVertexItem<'v> list
 
-type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
+/// Represents messages processed by the `StateMachine`.
+type Message<'v,'d when 'v:comparison and 'v:>IVertex> =
     | Alter of 
         disconnect:  (('v * InputRef) * ('v * OutputRef) option) list *
         remove:      ('v * RemoveStrategy) list *
@@ -154,6 +138,7 @@ type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
     | Stop      of 'v
     | Succeeded of 'v * VertexIndex * final: bool * 'd * startTime: TimeIndex // if not "final" the next iterations are coming
     | Failed    of 'v * VertexIndex * failure: System.Exception * startTime: TimeIndex
+    /// Todo: will be combined with `Succeeded`
     | RemoteSucceeded of RemoteVertexSucceeded<'v> 
 
 ////////////////////////
@@ -161,6 +146,15 @@ type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
 // State Machine
 //
 ////////////////////////
+
+/// Represents vertex output stored for each of the vertices as a part of the state machine state.
+[<Interface>]
+type IVertexData =
+    /// Returns a value indicating whether the data is available; if not, it should be re-evaluated.
+    abstract member Contains : OutputRef -> bool
+    /// If the data contains the given output and the output is a one-dimensional array,
+    /// returns length of the array; otherwise, returns `None`.
+    abstract member TryGetShape : OutputRef -> int option
 
 /// Returns a new state such that each of the graph vertices has a correct state.
 /// The given vertex state is used as-is but is checked for correctness;
@@ -170,16 +164,15 @@ type Message<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
 val normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> : DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
     
 [<Interface>]
-type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData and 'd:>IOutputsMatch<'d>> = 
+type IStateMachine<'v,'d when 'v:comparison and 'v:>IVertex> = 
     inherit System.IDisposable
     abstract Start : unit -> unit
     abstract State : State<'v,'d>
     abstract OnChanged : System.IObservable<State<'v,'d> * Changes<'v,'d>>
 
-[<Class>]
-type StateMachine =
-    /// Creates new state machine from the given initial state. 
-    /// The state machine will read messages from the `source` which must be empty unless the state machine is started.
-    /// To start the state machine, so that it will start reading and handling the messages, call `Start` method.
-    static member CreatePaused<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData and 'd:>IOutputsMatch<'d>> : 
-        source:System.IObservable<Message<'v, 'd>> -> initialState:(DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) -> IStateMachine<'v,'d>
+/// Creates new state machine from the given initial state. 
+/// The state machine will read messages from the `source` which must be empty unless the state machine is started.
+/// To start the state machine, so that it will start reading and handling the messages, call `Start` method.
+/// The `matchOutput` function returns true, if both data objects contain the given output and the both outputs are equal.
+val CreatePaused<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> : 
+    source:System.IObservable<Message<'v, 'd>> -> initialState:(DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) -> matchOutput:('d->'d->OutputRef->bool) -> IStateMachine<'v,'d>
