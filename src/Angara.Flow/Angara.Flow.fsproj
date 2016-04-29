@@ -48,6 +48,7 @@
     <Compile Include="Option.fs" />
     <Compile Include="List.fs" />
     <Compile Include="Observable.fs" />
+    <Compile Include="RuntimeContext.fs" />
     <Compile Include="MailboxProcessor.fs" />
     <Compile Include="MdMap.fsi" />
     <Compile Include="MdMap.fs" />
@@ -56,6 +57,8 @@
     <Compile Include="StateMachine.fsi" />
     <Compile Include="StateMachine.fs" />
     <Compile Include="Execution.fsi" />
+    <Compile Include="Execution.fs" />
+    <Compile Include="Flow.fsi" />
   </ItemGroup>
   <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>

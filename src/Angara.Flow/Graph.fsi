@@ -160,3 +160,6 @@ type VertexIndex = int list
 /// The state contains both status information and methods outputs.
 type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> =
     Map<'v, MdVertexState<'vs>>
+
+module DataFlowState =
+    val tryGet : 'v * VertexIndex -> DataFlowState<'v,'vs> -> 'vs option

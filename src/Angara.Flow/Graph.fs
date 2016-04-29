@@ -541,6 +541,18 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
         let g = connections |> Seq.fold f g
         (g, m)
 
-type MdVertexState<'vs> = Angara.Data.MdMap<int, 'vs>
+open Angara.Data
+open Angara.Option
+
+type MdVertexState<'vs> = MdMap<int, 'vs>
 type VertexIndex = int list
-type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> = Map<'v, MdVertexState<'vs>>
+
+type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> = 
+    Map<'v, MdVertexState<'vs>>
+
+module DataFlowState =
+    let tryGet (v,i) (s:DataFlowState<'v,'vs>) =
+        opt{
+            let! vs = s |> Map.tryFind v
+            return! vs |> MdMap.tryFind i
+        }
