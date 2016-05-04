@@ -807,7 +807,7 @@ module StateMachine =
             match state |> DataFlowState.tryGet (v,index) with 
             | None -> (graph, state), noChanges, noResponse // message is obsolete
             | Some(vis) ->
-                let trace k = Trace.StateMachine.TraceInformation("Method {0}.[{1}] iteration %d succeeded", v, index, k)
+                let trace k = Trace.StateMachine.TraceInformation("Method {0}.[{1}] iteration {2} succeeded", v, index, k)
                 let changes = noChanges
                 let state, changes = 
                     match vis.Status with
@@ -832,7 +832,7 @@ module StateMachine =
 
                     | VertexStatus.CompleteStarted (k, startTime) when startTime = m.StartTime ->
                         trace k                    
-                        match m.Result with
+                        match m.Result with // re-computing the transient vertex; the SM waits for certain iteration to consider the results as re-computed artefacts.
                         | IterationResult (data, iteration, _) when iteration = k ->
                             let state,changes = Changes.update (state, noChanges) v index { vis with Data = Some data; Status = VertexStatus.Complete k }
                             downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (state,changes) (v,i) ->  
@@ -904,5 +904,5 @@ type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> 
             agent |> Option.iter(fun d -> d.Dispose())
 
     static member CreateSuspended<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> 
-            (source:System.IObservable<Message<'v, 'd>>) (initialState:DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) (matchOutput:'d->'d->OutputRef->bool) : IStateMachine<'v,'d> = 
-            new StateMachine<'v,'d>(source, initialState, matchOutput) :> IStateMachine<'v,'d>
+        (source:System.IObservable<Message<'v, 'd>>) (initialState:DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) (matchOutput:'d->'d->OutputRef->bool) : IStateMachine<'v,'d> = 
+        new StateMachine<'v,'d>(source, initialState, matchOutput) :> IStateMachine<'v,'d>

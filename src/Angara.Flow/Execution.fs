@@ -4,16 +4,11 @@ open System
 open System.Threading
 open Angara.Graph
 open Angara.StateMachine
-open Angara.Trace
 open Angara.RuntimeContext
-
+open Angara.Option
+open Angara.Trace
 
 type Artefact = obj
-
-type Work<'v,'d when 'v:comparison and 'v:>IVertex> =
-    { Graph : DataFlowGraph<'v>
-      State : DataFlowState<'v,'d>
-    }
 
 type Output = 
     | Full    of Artefact list
@@ -23,50 +18,47 @@ type Output =
         | Full artefacts -> Some(artefacts.[outRef])
         | Partial artefacts -> if outRef < artefacts.Length then artefacts.[outRef] else None
 
-type Input = 
-    | NotAvailable
-    | Item of Artefact
-    | Array of Artefact array  
-
-type ResumableState = obj
-
-type CompoundMethod<'v,'d when 'v:comparison and 'v:>IVertex> = 
-    { Graph: DataFlowGraph<'v>
-      State: DataFlowState<'v,VertexState<'d>>
-      Inputs: ('v * InputRef) list
-      Outputs: ('v * OutputRef) list
-    }
-
-   
-[<Interface>]
-type IExecutableVertex<'v, 'd when 'v:comparison and 'v:>IExecutableVertex<'v,'d>> =
-    inherit IVertex
-    abstract Method : Input * 't option -> Output * 't option // Method<'v,'d> 
+[<AbstractClass>]
+type Method<'p> =
+    interface IVertex
+    interface IComparable
+    abstract Execute : Artefact list * 'p option -> (Artefact list * 'p option) seq
        
 
 [<Class>] 
-type ExecutableVertexData<'v when 'v:comparison and 'v:>IExecutableVertex<'v,ExecutableVertexData<'v>>> private (output: Output, resumableState: ResumableState option, compoundState: State<'v,ExecutableVertexData<'v>> option) =
-    interface IVertexData
-    member x.Output: Output = output
-    member x.Data : 't option
+type MethodVertexData<'d> (output: Output, p: 'd option) =
+    interface IVertexData with
+        member x.Contains(outRef) = 
+            match output with
+            | Output.Full art -> outRef < art.Length
+            | Output.Partial art -> outRef < art.Length && art.[outRef].IsSome
+
+        member x.TryGetShape(outRef) = 
+            x.TryGet outRef |> Option.map (function
+                | :? Array as a when a.Rank = 1 -> a.Length
+                | _ -> 0)
+        
+    member x.Output = output
+    member x.InternalData = p
+
+    member x.TryGet(outRef) : Artefact option = 
+        match output with
+        | Output.Full art when outRef < art.Length -> art.[outRef] |> Some
+        | Output.Partial art when outRef < art.Length -> art.[outRef]
+        | _ -> None
     
-    static member FromOutput(output: Output) =
-        ExecutableVertexData<'v>(output, None, None)
-
-    static member Resumable(output: Output, resumableState: ResumableState option) =
-        ExecutableVertexData<'v>(output, resumableState, None)
-
-    static member Compound(output: Output, compoundState: State<'v,ExecutableVertexData<'v>>) =
-        ExecutableVertexData<'v>(output, None, Some compoundState)
-
-    static member Empty = ExecutableVertexData<'v>(Partial [], None, None)
+    static member Empty = MethodVertexData<'d>(Partial [], None)
  
+type Input = 
+    | NotAvailable
+    | Item of Artefact
+    | Array of Artefact array 
 
 module Artefacts =
     open Angara.Option
     open Angara.Data
     
-    let internal tryGetOutput<'v when 'v:comparison and 'v:>IExecutableVertex<'v,ExecutableVertexData<'v>>> (edge:Edge<_>) (i:VertexIndex) (state:DataFlowState<'v,VertexState<ExecutableVertexData<'v>>>) : Artefact option =
+    let internal tryGetOutput (edge:Edge<Method<_>>) (i:VertexIndex) (state:DataFlowState<Method<_>,VertexState<MethodVertexData<_>>>) : Artefact option =
         opt {
             let! vs = state |> Map.tryFind edge.Source
             let! vis = vs |> MdMap.tryFind i
@@ -76,7 +68,7 @@ module Artefacts =
 
     /// Sames as getOutput, but "i" has rank one less than rank of the source vertex,
     /// therefore result is an array of artefacts for all available indices complementing "i".
-    let internal tryGetReducedOutput<'v when 'v:comparison and 'v:>IExecutableVertex<'v,ExecutableVertexData<'v>>> (edge:Edge<_>) (i:VertexIndex) (state:DataFlowState<'v,VertexState<ExecutableVertexData<'v>>>) : Artefact[] option =
+    let internal tryGetReducedOutput (edge:Edge<_>) (i:VertexIndex) (state:DataFlowState<'v,VertexState<MethodVertexData<_>>>) : Artefact[] option =
         match state |> Map.tryFind edge.Source with
         | Some svs ->
             let r = i.Length
@@ -96,7 +88,7 @@ module Artefacts =
 
     /// Returns the vertex' output artefact as n-dimensional typed jagged array, where n is a rank of the vertex.
     /// If n is zero, returns the typed object itself.
-    let getMdOutput<'v when 'v:comparison and 'v:>IExecutableVertex<'v,ExecutableVertexData<'v>>> (v:'v) (outRef: OutputRef) (graph:DataFlowGraph<'v>, state:DataFlowState<'v,VertexState<ExecutableVertexData<'v>>>) = 
+    let getMdOutput (v:'v) (outRef: OutputRef) (graph:DataFlowGraph<'v>, state:DataFlowState<'v,VertexState<MethodVertexData<_>>>) = 
         let vector = state |> Map.find v |> MdMap.map (fun vis -> vis.Data.Value.Output.TryGet(outRef).Value)
         let rank = vertexRank v graph.Structure
         if rank = 0 then 
@@ -261,131 +253,28 @@ let internal analyzeChanges (state: State<'v,'d>, changes: Changes<'v,'d>) : Run
 //
 //////////////////////////////////////////////
 
-type EvaluationCallback<'d> = 
-    { OnSucceeded       : 'd -> unit
-      OnIteration       : 'd -> unit
-      OnNoMoreIterations: unit -> unit
-      OnFailure         : System.Exception -> unit 
-      OnProgress        : System.IProgress<float> }
-
-
-type EvaluationTarget<'v,'d when 'v:comparison and 'v:>IVertex> = 
-    { Vertex : 'v
-      Index : VertexIndex
-      Snapshot : State<'v,'d> }
-    
-open Angara.Option
 open Angara.Observable
 open System.Collections.Generic
 
-[<Interface>]
-type IRuntime<'v,'d when 'v:comparison and 'v:>IVertex> =        
-    inherit IDisposable
-    abstract Evaluation : IObservable<Message<'v,'d>>
-    abstract Progress : IObservable<'v*VertexIndex*float>
-
-[<Interface>]
-type IEngine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
-    inherit IDisposable
-    abstract StateMachine : IStateMachine<'v,'d>
-    abstract Runtime : IRuntime<'v,'d>
-
-    abstract Start : unit -> unit
-
-[<Interface>]
-type IEngineFactory<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
-    abstract CreateSuspended : initialState:(DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) -> IEngine<'v,'d>
-
-
-
-///////////////////////////////////////////
-//
-// Compound Method
-//
-///////////////////////////////////////////
-
-open Angara.Data
-
-[<Interface>]
-type ICompoundMethodEvaluator<'v,'d when 'v:comparison and 'v:>IVertex> =
-    abstract EvaluateAsync : Artefact list -> CompoundMethod<'v,'d> -> EvaluationCallback<'d> -> Async<unit>
-
-
-type CompoundMethodEvaluator<'v when 'v:comparison and 'v:>IExecutableVertex<'v,ExecutableVertexData<'v>>>(createMakeValue : Artefact -> Type -> 'v, engineFactory : IEngineFactory<'v,ExecutableVertexData<'v>>) =
-    
-    interface ICompoundMethodEvaluator<'v,ExecutableVertexData<'v>> with
-
-        member x.EvaluateAsync inputs c callback = 
-            if inputs.Length <> c.Inputs.Length then failwith "Number of input artefacts in the flow state differs from number of the compound method inputs"
-
-            let prepareInputs ((graph:DataFlowGraph<'v>, state:DataFlowState<'v,VertexState<ExecutableVertexData<'v>>>), connects:AlterConnection<'v> list) (((v,inRef),a) : ('v*InputRef)*Artefact) =
-                let mkv : 'v = createMakeValue a v.Inputs.[inRef]
-                let graph = graph.Add mkv
-                let connects = AlterConnection.ItemToItem((v, inRef), (mkv, 0)) :: connects
-                let state = state.Add(mkv, VertexState.Complete (ExecutableVertexData.FromOutput(Output.Full [a])) |> MdMap.scalar)
-                (graph,state),connects
-
-            let merge,connect = Seq.zip c.Inputs inputs |> Seq.fold prepareInputs ((DataFlowGraph<'v>.Empty,Map.empty), [])
-
-            async{
-                use engine = engineFactory.CreateSuspended (c.Graph, c.State)
-                engine.Start()
-
-                do! engine.StateMachine.AlterAsync ([], [], merge, connect) 
-                let! finalWork = awaitFinal engine.StateMachine.Changes
-
-                // todo: if finalWork is complete:
-                match finalWork.Data.GetStatus() with
-                | 
-                let outputs = c.Outputs |> List.map (fun (v,outRef) -> Artefacts.getMdOutput v outRef (finalWork.Graph, finalWork.Data))
-                callback.OnSucceeded (ExecutableVertexData.Compound(Full outputs, finalWork))
-
-//            return 
-//                match stableWrk with
-//                | Engine.StableWork.Complete snapshot -> 
-//                    outputs |> List.map (fun (v,outRef) -> extractOutput v outRef snapshot) |> Array.ofList, (snd snapshot) :> Angara.Execution.CustomState
-//                | Engine.StableWork.Incomplete (_,reasons) -> 
-//                    let exns = reasons |> Seq.map (fun (v,i,r) -> 
-//                                            match r with
-//                                            | ExecutionFailed exn -> 
-//                                                Trace.Runtime.TraceEvent(Angara.Trace.Event.Error, 100, "Compound method execution failed: " + (exn.ToString()))
-//                                                Some(new Angara.Execution.MethodException(v,i, exn) :> System.Exception)
-//                                            | UnassignedInputs -> Some(new Angara.Execution.MethodException(v, i, new System.Exception("Method has unassigned inputs")) :> System.Exception)
-//                                            | OutdatedInputs -> Some(new Angara.Execution.MethodException(v, i, new System.Exception("Method has outdated inputs")) :> System.Exception)
-//                                            | Stopped -> 
-//                                                Trace.Runtime.TraceEvent(Angara.Trace.Event.Error, 100, "Compound method execution stopped")
-//                                                Some(new Angara.Execution.MethodException(v,i, new System.OperationCanceledException()) :> System.Exception)
-//                                            | TransientInputs -> None)
-//                                        |> Seq.filter (Option.isSome) |> Seq.map (Option.get) |> Seq.toArray
-//                    raise (new Angara.Execution.CustomBehaviorException("Compound method could not be complete", exns, snd engine.Current))
-            } 
-
-
-
-///////////////////////////////////////////
-//
-// Implementation
-//
-///////////////////////////////////////////
+type internal Progress<'v>(v:'v, i:VertexIndex, progressReported : ObservableSource<'v*VertexIndex*float>) =
+    interface IProgress<float> with
+        member x.Report(p: float) = progressReported.Next(v,i,p)
 
 type internal IScheduler =
     abstract Start : (unit -> unit) -> unit
     abstract Start : Async<unit> -> unit
 
-type internal Progress<'v>(v:'v, i:VertexIndex, progressReported : ObservableSource<'v*VertexIndex*float>) =
-    interface IProgress<float> with
-        member this.Report(p: float) = progressReported.Next(v,i,p)
+[<Sealed>]
+type Runtime<'p> 
+    (source:IObservable<State<Method<'p>, MethodVertexData<'p>> * RuntimeAction<Method<'p>> list>, scheduler : IScheduler) =
 
-type internal RuntimeImpl<'v when 'v:comparison and 'v:>IExecutableVertex<'v,ExecutableVertexData<'v>>>
-    (source:IObservable<State<'v,ExecutableVertexData<'v>> * RuntimeAction<'v> list>, scheduler : IScheduler, engineFactory : IEngineFactory<'v,ExecutableVertexData<'v>>) =
+    let messages = ObservableSource<Message<Method<'p>, MethodVertexData<'p>>>()
+    let cancels = Dictionary<Method<'p>*VertexIndex,CancellationTokenSource>()
+    let progressReported = ObservableSource<Method<'p>*VertexIndex*float>()
 
-    let messages = ObservableSource<Message<'v,ExecutableVertexData<'v>>>()
-    let cancels = Dictionary<'v*VertexIndex,CancellationTokenSource>()
-    let progressReported = ObservableSource<'v*VertexIndex*float>()
-
-    let progress (v:'v) (i:VertexIndex) : IProgress<float> = new Progress<'v>(v, i, progressReported) :> IProgress<float>
+    let progress (v:Method<'p>) (i:VertexIndex) : IProgress<float> = new Progress<Method<'p>>(v, i, progressReported) :> IProgress<float>
     
-    let cancel (v:'v, i:VertexIndex) (cancels:Dictionary<'v*VertexIndex,CancellationTokenSource>) = 
+    let cancel (v:Method<'p>, i:VertexIndex) (cancels:Dictionary<Method<'p>*VertexIndex,CancellationTokenSource>) = 
         match cancels.ContainsKey (v,i) with
         | true -> 
             let cts = cancels.[v,i]
@@ -394,38 +283,37 @@ type internal RuntimeImpl<'v when 'v:comparison and 'v:>IExecutableVertex<'v,Exe
             cancels.Remove(v,i) |> ignore
         | _ -> ()
 
-    let cancelAll v (cancels:Dictionary<'v*VertexIndex,CancellationTokenSource>) = 
+    let cancelAll v (cancels:Dictionary<Method<'p>*VertexIndex,CancellationTokenSource>) = 
         let indices = cancels |> Seq.choose(fun k -> let u,i = k.Key in if u = v then Some(i) else None) |> Seq.toArray
         indices |> Seq.iter (fun i -> cancel (v,i) cancels)
 
     let delay (v,i) time =
         let delayMs = 0                    
-        let trace() = Trace.Runtime.TraceEvent(Trace.Event.Verbose, 0, sprintf "Starting %O.%A at %d" v i time)
+        let run() = 
+            Trace.Runtime.TraceEvent(Trace.Event.Verbose, 0, sprintf "Starting %O.%A at %d" v i time)
+            messages.Next(Message.Start ({ Vertex = v; Index = Some i; CanStartTime = Some time }, ignore))
         if delayMs > 0 then
             let cts = new CancellationTokenSource()
             cancels.Add((v,i), cts)
             Async.Start(
                 async {
                     do! Async.Sleep(delayMs)
-                    if not (cts.IsCancellationRequested) then
-                        trace()
-                        messages.Next(Message.Start(v, Some(i,Some time), ignore))
-                    else ()
+                    if not (cts.IsCancellationRequested) then run() else ()
                 }, cts.Token)
-        else trace(); messages.Next(Message.Start(v, Some(i,Some time), ignore))        
+        else run()
        
-    let onSuccess v index time snapshot = messages.Next(Message.Succeeded(v, index, true, snapshot, time))
-    let onSuccessP v index time snapshot = messages.Next(Message.Succeeded(v, index, true, snapshot, time))
-    let onIteration v index time snapshot = messages.Next(Message.Succeeded(v, index, false, snapshot, time))
-    let noMoreIterations v index time () = messages.Next(Message.Succeeded(v, index, true, ExecutableVertexData.Empty, time))
-    let onFailure v index time ex = messages.Next(Message.Failed(v, index, ex, time))
-    let reaction v index time : EvaluationCallback<ExecutableVertexData<'v>> = 
-        { OnSucceeded = onSuccess v index time
-          OnIteration = onIteration v index time
-          OnNoMoreIterations = noMoreIterations v index time
-          OnFailure = onFailure v index time
-          OnProgress = progress v index }
+    let postIterationSucceeded v index time iteration result =
+        Message.Succeeded { Vertex = v; Index = index; StartTime = time; Result = SucceededResult.IterationResult(result, iteration, false) }
+        |> messages.Next
+        
+    let postNoMoreIterations v index time = 
+        Message.Succeeded { Vertex = v; Index = index; StartTime = time; Result = SucceededResult.NoMoreIterations }
+        |> messages.Next
 
+    let postFailure v index time exn = 
+        Message.Failed { Vertex = v; Index = index; StartTime = time; Failure = exn }
+        |> messages.Next
+    
     let convertArrays (inpTypes:Type list) (inputs:Input[]) =
         let restore (inp:Input, inpType:Type) : Artefact = 
             match inp with
@@ -439,63 +327,38 @@ type internal RuntimeImpl<'v when 'v:comparison and 'v:>IExecutableVertex<'v,Exe
             | NotAvailable -> failwith "Input artefacts for the method to execute are not available"
         Seq.zip inputs inpTypes |> Seq.map restore |> List.ofSeq
 
-    let buildEvaluation (callback:EvaluationCallback<ExecutableVertexData<'v>>) (target:EvaluationTarget<'v,ExecutableVertexData<'v>>) (cts:CancellationTokenSource) = 
+    let buildEvaluation (v:Method<'p>,index,time,state:State<Method<'p>,MethodVertexData<'p>>) (cts:CancellationTokenSource) = fun() ->
+        Trace.Runtime.TraceEvent(Event.Start, RuntimeId.Evaluation, sprintf "Starting evaluation of %O.[%A]" v index)
+                
         let cancellationToken = cts.Token
-        let action() = 
-            Trace.Runtime.TraceEvent(Event.Start, RuntimeId.Evaluation, sprintf "Starting evaluation of %O.[%A]" target.Vertex target.Index)
+        RuntimeContext.replaceContext 
+            { Token = cancellationToken
+              ProgressReporter = progress v index
+              Logger = null } |> ignore
+
+        let inputs = (v, index) |> Artefacts.getInputs (state.FlowState, state.Graph)
+        try
+            let n, data = 
+                match state.FlowState |> DataFlowState.tryGet (v,index) with
+                | Some vis -> vis.Status.TryGetIterationCount(), vis.Data |> Option.bind(fun d -> d.InternalData)
+                | None -> None, None
+            let n = defaultArg n 0
+            let inArtefacts = inputs |> convertArrays (v:>IVertex).Inputs
+
+            v.Execute(inArtefacts, data)
+            |> Seq.skip n // if resuming after iteration `n`
+            |> Seq.takeWhile (fun _ -> not cancellationToken.IsCancellationRequested)
+            |> Seq.iteri (fun i (output,internalData) -> MethodVertexData(Output.Full output, internalData) |> postIterationSucceeded v index time (n+i))
                 
-            RuntimeContext.replaceContext 
-                { Token = cancellationToken
-                  ProgressReporter = callback.OnProgress
-                  Logger = null } |> ignore
+            if not cancellationToken.IsCancellationRequested then 
+                postNoMoreIterations v index time
 
-            let inputs = (target.Vertex, target.Index) |> Artefacts.getInputs (target.Snapshot.Status, target.Snapshot.Graph)
-            try
-                match target.Vertex.Method with
-                | Function f -> 
-                    let output = f(inputs |> convertArrays target.Vertex.Inputs)
-                    callback.OnSucceeded(ExecutableVertexData.FromOutput (Full output)) 
-                | Iterative f -> 
-                    let n = 
-                        opt{
-                            let! vis = target.Snapshot.Status |> DataFlowState.tryGet (target.Vertex, target.Index)
-                            return! vis.Status.TryGetIterationCount
-                        }
+            Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "SUCCEEDED execution of %O.[%A]" v index)
+        with ex -> 
+            Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "FAILED execution of %O.[%A]" v index)
+            ex |> postFailure v index time
 
-                    f(inputs |> convertArrays target.Vertex.Inputs)                                                               
-                    |> Seq.skip (defaultArg n 0)
-                    |> Seq.takeWhile (fun _ -> not cancellationToken.IsCancellationRequested)
-                    |> Seq.iter (fun output -> callback.OnIteration(ExecutableVertexData.FromOutput (Full output)))
-                    if not(cancellationToken.IsCancellationRequested) then callback.OnNoMoreIterations()
-
-                | Resumable f -> 
-                    let resumableState = 
-                        opt{
-                            let! vis = target.Snapshot.Status |> DataFlowState.tryGet (target.Vertex, target.Index)
-                            let! k = vis.Status.TryGetIterationCount
-                            let! data = vis.Data
-                            match k, data.Output with
-                            | k, Full artefacts when k > 0 -> return artefacts, data.ResumableState
-                            | _ -> return! None
-                        }
-
-                    f(resumableState, inputs |> convertArrays target.Vertex.Inputs) 
-                    |> Seq.takeWhile (fun _ -> not cancellationToken.IsCancellationRequested) 
-                    |> Seq.iter (fun (artefacts, resumable) -> callback.OnIteration(ExecutableVertexData.Resumable (Full artefacts, resumable)))
-                    if not(cancellationToken.IsCancellationRequested) then callback.OnNoMoreIterations() 
-                
-                | Compound с ->
-                    buildCompoundEvaluation()
-
-
-                Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "Successfully completed execution of %O.[%A]" target.Vertex target.Index)
-            with ex -> 
-                Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "Completed with failure execution of %O.[%A]" target.Vertex target.Index)
-                callback.OnFailure(ex)
-           
-        action
-
-    let performAction (state : State<'v,ExecutableVertexData<'v>>) (action : RuntimeAction<'v>) = 
+    let performAction (state : State<Method<_>,MethodVertexData<_>>) (action : RuntimeAction<Method<_>>) = 
         match action with
         | Delay (v,slice,time) -> 
             cancel (v,slice) cancels
@@ -505,12 +368,8 @@ type internal RuntimeImpl<'v when 'v:comparison and 'v:>IExecutableVertex<'v,Exe
             cancel (v,slice) cancels
 
         | Execute (v,slice,time) -> 
-            let target : EvaluationTarget<'v,ExecutableVertexData<'v>> = 
-                { Vertex = v
-                  Index = slice
-                  Snapshot = state}
             let cts = new CancellationTokenSource()
-            let func = buildEvaluation (reaction v slice time) target cts 
+            let func = buildEvaluation (v,slice,time,state) cts 
             scheduler.Start func
             cancel (v,slice) cancels
             cancels.Add((v,slice), cts)
@@ -518,31 +377,56 @@ type internal RuntimeImpl<'v when 'v:comparison and 'v:>IExecutableVertex<'v,Exe
         | Remove v -> 
             cancelAll v cancels
 
-    let perform (state : State<'v,ExecutableVertexData<'v>>, actions : RuntimeAction<'v> list) = 
+    let perform (state : State<_,_>, actions : RuntimeAction<_> list) = 
         try
             actions |> Seq.iter (performAction state) 
         with exn ->
             Trace.Runtime.TraceEvent(Trace.Event.Critical, 0, sprintf "Execution runtime failed: %O" exn)
             messages.Error exn
-//            match subscription with
-//            | null -> ()
-//            | _ -> subscription.Dispose()
+
+    let mutable subscription = null
+
+    do
+        subscription <- source |> Observable.subscribe perform 
 
 
-    interface IRuntime<'v,ExecutableVertexData<'v>> with
+    interface IDisposable with
         member x.Dispose() = 
-            //subscription.Dispose()
+            subscription.Dispose()
             cancels.Values |> Seq.iter(fun t -> t.Cancel(); (t :> IDisposable).Dispose())
             messages.Completed()
             progressReported.Completed()
 
-        member x.Evaluation = messages.AsObservable
-        member x.Progress = progressReported.AsObservable
-        
-    
+    member x.Evaluation = messages.AsObservable
+    member x.Progress = progressReported.AsObservable
 
-//let Run<'v,'d when 'v:comparison and 'v:>IVertex> (source:IObservable<State<'v,'d> * Changes<'v,'d>>) : IRuntime<'v,'d> =
-//    let actions = source |> Observable.map (fun (s,c) -> s, analyzeChanges (s,c))
-//    let evaluator = ()
-//    upcast RuntimeImpl(actions, evaluator)
-//    
+[<Class>]
+type Engine<'p>(initialState:DataFlowGraph<Method<'p>>*DataFlowState<Method<'p>,VertexState<MethodVertexData<'p>>>, scheduler:IScheduler) =
+    
+    let messages = Angara.Observable.ObservableSource()
+
+    let matchOutput (a:MethodVertexData<'p>) (b:MethodVertexData<'p>) (outRef:OutputRef) = 
+        match a.TryGet outRef, b.TryGet outRef with
+        | Some artA, Some artB -> LanguagePrimitives.GenericEqualityComparer.Equals(a,b)
+        | _ -> false
+            
+    let stateMachine = Angara.StateMachine.CreateSuspended messages.AsObservable matchOutput initialState
+    let runtimeActions = stateMachine.Changes |> Observable.map (fun (s,c) -> s, analyzeChanges (s,c))
+    let runtime = new Runtime<'p>(runtimeActions, scheduler)
+
+    let mutable sbs = null
+
+    do
+        sbs <- runtime.Evaluation.Subscribe(messages.Next)
+
+    member x.StateMachine = stateMachine
+    member x.Runtime = runtime
+
+    member x.Start() = stateMachine.Start()
+
+    interface IDisposable with
+        member x.Dispose() = 
+            sbs.Dispose()
+            (stateMachine :> IDisposable).Dispose()
+            (runtime :> IDisposable).Dispose()
+

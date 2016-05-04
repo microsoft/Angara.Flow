@@ -51,7 +51,7 @@ module StateMachine =
         member IsUpToDate : bool
         member IsCompleted : bool
         member IsIncompleteReason : IncompleteReason -> bool
-        member TryGetIterationCount : int option
+        member TryGetIterationCount : unit -> int option
 
     /// Keeps status and data of a vertex as part of the StateMachine state.
     type VertexState<'d>  = {
@@ -136,7 +136,7 @@ module StateMachine =
 
     type SucceededResult<'d> = 
         | IterationResult of data:'d * iteration : int * isFinal: bool
-        /// Indicates that the previous SucceededMessage was the last iteration.
+        /// Indicates that the previous SucceededMessage was the last iteration, though its `isFinal` was `false`.
         | NoMoreIterations
 
     /// A message for the state machine indicating that an iteration of evaluation 
@@ -232,10 +232,10 @@ type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex> =
     /// Alters the flow dependency graph by performing the batch of operations in the specific order:
     /// disconnect vertices; remove vertices; merge with another graph; connect vertices.
     /// The operation asynchronously completes when all the operations succeed.
-    member AlterAsync : ((('v*InputRef) * ('v*OutputRef) option) list * ('v*RemoveStrategy) list * (DataFlowGraph<'v>*DataFlowState<'v,VertexState<'d>>) * AlterConnection<'v> list) -> Async<unit>
+    member AlterAsync : AlterMessage<'v,'d> -> Async<unit>
 
     /// Creates new state machine from the given initial state. 
     /// The state machine will read messages from the `source` which must be empty unless the state machine is started.
     /// To start the state machine, so that it will start reading and handling the messages, call `Start` method.
     /// The `matchOutput` function returns true, if both data objects contain the given output and the both outputs are equal.
-    static member CreateSuspended : source:System.IObservable<Message<'v, 'd>> -> initialState:(DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) -> matchOutput:('d->'d->OutputRef->bool) -> StateMachine<'v,'d>
+    static member CreateSuspended : source:System.IObservable<Message<'v, 'd>> -> matchOutput:('d->'d->OutputRef->bool) -> initialState:(DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) -> StateMachine<'v,'d>
