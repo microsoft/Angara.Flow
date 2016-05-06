@@ -1,4 +1,4 @@
-﻿namespace Angara.Flow.AssemblyInfo
+﻿namespace Angara.AssemblyInfo
 
 open System.Reflection
 open System.Runtime.CompilerServices

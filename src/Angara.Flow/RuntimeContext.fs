@@ -16,7 +16,7 @@ open System
 type ContextType = {
     Token : Threading.CancellationToken
     ProgressReporter : IProgress<float>
-    Logger : ILogger
+    //Logger : ILogger
     }
 /// An abstract logger with three levels of details.
 and [<Interface>] ILogger =
@@ -40,7 +40,7 @@ type private Logger() =
         member x.Error msg = printfn "%s" msg
         member x.Level = Info
 
-let private empty  = {Token = Async.DefaultCancellationToken; ProgressReporter = Reporter(); Logger = Logger()}
+let private empty  = {Token = Async.DefaultCancellationToken; ProgressReporter = Reporter(); (*Logger = Logger()*)}
 
 
 /// Implementation of a thread static field.
@@ -62,8 +62,9 @@ let replaceContext = ThreadContextImpl.Replace
 
 /// Formats a message and reports it as an information
 let tracef format = 
-    let trace msg = getContext().Logger.Info msg
-    Printf.kprintf trace format
+    //let trace msg = getContext().Logger.Info msg
+    //Printf.kprintf trace format
+    ()
 
 /// Tells an execution environment a progress (between 0 and 1) of running computation.
 let reportProgress f = getContext().ProgressReporter.Report f
@@ -72,10 +73,10 @@ let reportProgress f = getContext().ProgressReporter.Report f
 let getCacellationToken() = getContext().Token
 
 /// Reports a message for debugging purposes.
-let logDebug msg = getContext().Logger.Debug msg
+let logDebug msg = () //getContext().Logger.Debug msg
 
 /// Reports an informational message that helps trace computation.
-let logInfo msg = getContext().Logger.Info msg
+let logInfo msg = () //getContext().Logger.Info msg
 
 /// Reports an error message.
-let logError msg = getContext().Logger.Error msg
+let logError msg = () //getContext().Logger.Error msg

@@ -24,6 +24,8 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{AC7F7811-EC75-4706-9AD2-740C6BFD69EA}"
 	ProjectSection(SolutionItems) = preProject
 		docs\content\Execution.md = docs\content\Execution.md
+		Flow.fsx = Flow.fsx
+		UseCases - Wheat.fsx = UseCases - Wheat.fsx
 	EndProjectSection
 EndProject
 Global

@@ -38,7 +38,7 @@ module StateMachine =
         member x.IsUpToDate = match x with Complete _ | CompleteStarted _ | CompleteStartRequested _ -> true | Started (k,_) when k > 0 -> true | _ -> false
         member x.IsCompleted = match x with Complete _ -> true | _ -> false
         member x.IsIncompleteReason reason = match x with Incomplete r when r = reason -> true | _ -> false
-        member x.TryGetCompleteIterations = 
+        member x.TryGetIterationCount() = 
             match x with
             | Complete k | CompleteStarted (k,_) | CompleteStartRequested k | Started (k,_) -> Some k
             | _ -> None
@@ -51,6 +51,8 @@ module StateMachine =
             { Status = VertexStatus.Incomplete (IncompleteReason.UnassignedInputs); Data = None }
         static member Outdated : VertexState<'d> = 
             { Status = VertexStatus.Incomplete (OutdatedInputs); Data = None }
+        static member Complete (d: 'd, iteration: int) =
+            { Status = VertexStatus.Complete (iteration); Data = Some d }
 
     type State<'v,'d when 'v:comparison and 'v:>IVertex> =
         { Graph : DataFlowGraph<'v>
@@ -89,7 +91,7 @@ module StateMachine =
           CanStartTime: TimeIndex option }
    
     type SucceededResult<'d> = 
-        | IterationResult of data:'d * iteration : int * isFinal: bool
+        | IterationResult of data:'d * iteration : int
         | NoMoreIterations
 
     type SucceededMessage<'v,'d> =
@@ -816,9 +818,9 @@ module StateMachine =
                         match m.Result with
                         | NoMoreIterations when k = 0 -> failwith "There must be at least one iteration before the 'no more iteration' message is received"
                         | NoMoreIterations -> Changes.update (state, changes) v index { vis with Status = VertexStatus.Complete k }
-                        | IterationResult (data, iteration, isFinal) when iteration > k -> 
-                            if not isFinal then Trace.StateMachine.TraceInformation("Method {0}.[{1}] continues...", v, index)
-                            let status = if isFinal then VertexStatus.Complete iteration else VertexStatus.Started (iteration, startTime)
+                        | IterationResult (data, iteration) when iteration > k -> 
+                            Trace.StateMachine.TraceInformation("Method {0}.[{1}] continues...", v, index)
+                            let status = VertexStatus.Started (iteration, startTime)
                             let state,changes = 
                                 Changes.update (state, changes) v index { vis with Data = Some data; Status = status }   
                                 |> downstreamShape (v, index) graph
@@ -828,12 +830,12 @@ module StateMachine =
                                 if k > 0 then getAffectedDependencies (v, index) vis.Data data graph matchOutput |> Seq.ofArray                        
                                 else v |> graph.Structure.OutEdges
                             downstreamVerticesFor affectedEdges index (graph,state) |> Seq.fold(fun (s,c) vi -> downstreamToCanStartOrIncomplete time vi (graph,s,c)) (state,changes)
-                        | IterationResult (_, _, _) -> failwith "The `Succeeded` message is for the iteration that is smaller than in the previously received message"
+                        | IterationResult (_, _) -> failwith "The `Succeeded` message is for the iteration that is smaller than in the previously received message"
 
                     | VertexStatus.CompleteStarted (k, startTime) when startTime = m.StartTime ->
                         trace k                    
                         match m.Result with // re-computing the transient vertex; the SM waits for certain iteration to consider the results as re-computed artefacts.
-                        | IterationResult (data, iteration, _) when iteration = k ->
+                        | IterationResult (data, iteration) when iteration = k ->
                             let state,changes = Changes.update (state, noChanges) v index { vis with Data = Some data; Status = VertexStatus.Complete k }
                             downstreamVertices (v,index) (graph,state) |> Seq.fold(fun (state,changes) (v,i) ->  
                                 match state.[v] |> MdMap.tryFind i with
@@ -874,7 +876,7 @@ type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> 
         Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Critical, 1, sprintf "Execution of the agent results in an exception %O at time %d" exn state.TimeIndex)
         Angara.MailboxProcessor.AfterError.ContinueProcessing state
 
-    member x.OnChanged = obs.AsObservable
+    member x.Changes = obs.AsObservable
         
     member x.Start() = 
         match agent with
@@ -884,8 +886,8 @@ type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> 
                 match agent with 
                 | Some agent -> agent.Post message
                 | None -> 
-                    Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Critical, 1, "A message is received before the StateMachineImpl.Start is finished")
-                    invalidOp "A message is received before the StateMachineImpl.Start is finished")
+                    Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Critical, 1, "A message is received before the StateMachine.Start is finished")
+                    invalidOp "A message is received before the StateMachine.Start is finished")
 
             let flowState, changes = normalize initialState
             let state = { Graph = fst initialState; FlowState = flowState; TimeIndex = 1UL }
@@ -894,15 +896,12 @@ type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> 
             obs.Next (state, changes)
 
         
-    interface IStateMachine<'v,'d> with
-        member x.OnChanged = obs.AsObservable
-        member x.Start() = x.Start()
-        member x.State = lastState
+    member x.State = lastState
 
+    interface System.IDisposable with
         member x.Dispose() = 
             match unsubs with null -> () | d -> d.Dispose()
             agent |> Option.iter(fun d -> d.Dispose())
 
-    static member CreateSuspended<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> 
-        (source:System.IObservable<Message<'v, 'd>>) (initialState:DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) (matchOutput:'d->'d->OutputRef->bool) : IStateMachine<'v,'d> = 
-        new StateMachine<'v,'d>(source, initialState, matchOutput) :> IStateMachine<'v,'d>
+    static member CreateSuspended (source:System.IObservable<Message<'v, 'd>>) (matchOutput:'d->'d->OutputRef->bool) (initialState:DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>) = 
+        new StateMachine<'v,'d>(source, initialState, matchOutput) 

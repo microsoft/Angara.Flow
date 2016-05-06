@@ -70,7 +70,7 @@ module StateMachine =
         /// before it could be able to start.
         static member Outdated : VertexState<'d>
         /// Creates a `VertexState` instance indicating a vertex that successfully completed its evaluation.
-        static member Complete : 'd -> VertexState<'d>
+        static member Complete : 'd * int -> VertexState<'d>
 
     /// An immutable type which keeps state for the StateMachine.
     type State<'v,'d when 'v:comparison and 'v:>IVertex> =
@@ -135,7 +135,8 @@ module StateMachine =
           CanStartTime: TimeIndex option }
 
     type SucceededResult<'d> = 
-        | IterationResult of data:'d * iteration : int * isFinal: bool
+        /// Contains results of the iteration with the given number.
+        | IterationResult of data:'d * iteration : int
         /// Indicates that the previous SucceededMessage was the last iteration, though its `isFinal` was `false`.
         | NoMoreIterations
 
@@ -207,32 +208,14 @@ module StateMachine =
     /// The returned changes describe the changes made in the returned state if compare to the given state.
     val normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> : DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
     
-
-    /// Awaits until the state becomes final,
-    /// i.e. there are no methods that are being evaluated or can be evaluated in the flow.
-    /// Returns the found final flow state.
-    val awaitFinal : System.IObservable<State<'v,'d> * Changes<'v,'d>> -> Async<State<'v,'d>>
-
-    type StateStatus =
-        | Complete 
-        | Incomplete
-        | NonFinal
-
-    val status : DataFlowState<'v,VertexState<'d>> -> StateStatus
-
 open StateMachine
 
 [<Sealed>]
-type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex> = 
+type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> = 
     interface System.IDisposable
     member State : State<'v,'d>
     member Start : unit -> unit    
     member Changes : System.IObservable<State<'v,'d> * Changes<'v,'d>>
-    
-    /// Alters the flow dependency graph by performing the batch of operations in the specific order:
-    /// disconnect vertices; remove vertices; merge with another graph; connect vertices.
-    /// The operation asynchronously completes when all the operations succeed.
-    member AlterAsync : AlterMessage<'v,'d> -> Async<unit>
 
     /// Creates new state machine from the given initial state. 
     /// The state machine will read messages from the `source` which must be empty unless the state machine is started.
