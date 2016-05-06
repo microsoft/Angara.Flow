@@ -60,6 +60,8 @@
     <Compile Include="Execution.fs" />
     <Compile Include="Flow.fsi" />
     <Compile Include="Flow.fs" />
+    <Compile Include="Methods.fsi" />
+    <Compile Include="Methods.fs" />
   </ItemGroup>
   <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>
