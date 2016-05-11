@@ -29,20 +29,29 @@ module StateMachine =
 
     /// Indicates how the state machine considers a vertex item.
     type VertexStatus =
-        /// The vertex execution has successfully completed after the given number of iterations.
-        | Complete                  of iteration: int    
-        /// The vertex execution has successfully completed after the given number of iterations,
+        /// The vertex execution has successfully completed.
+        | Complete             of iterations: int                
+        /// The vertex execution has successfully completed,
         /// but the output is missing in the dataflow state,
-        /// so the vertex is being executed again to get the execution output.
+        /// so the vertex is being executed again to reproduce the execution output.
         /// The `startTime` contains the state machine time index when the vertex entered this status.
-        | CompleteStarted           of iteration: int * startTime: TimeIndex
+        | Reproduces           of iterations: int * startTime: TimeIndex
         /// The vertex execution has successfully completed but the output is missing in the dataflow state,
-        /// but the output is missing in the dataflow state,
         /// so the vertex is required to be executed again, but it cannot while there is an input vertex
         /// which also has no state and must be executed.
-        | CompleteStartRequested    of iteration: int
-        /// The vertex is being executed, has completed given number of iterations and entered this status at the given `startTime`.
-        | Started                   of iteration: int * startTime: TimeIndex
+        | ReproduceRequested   of iterations: int
+        /// The vertex is being executed and hasn't produce its output yet,
+        /// so the dependent vertices cannot start.
+        /// It entered this status at the given `startTime`.
+        | Started                   of startTime: TimeIndex
+        /// The vertex is being executed but already produced its output one or more times,
+        /// so the dependent vertices can start.
+        /// This state is reachable for iterative methods. During the first iteration, 
+        /// it is in the `Started` status; when it succeeds, it goes to the `Continues` status so
+        /// that the dependent vertices can try to start.
+        /// It entered this status at the given `startTime`.
+        | Continues                 of iterations: int * startTime: TimeIndex
+        | ContinueRequested         of iterations: int
         /// The vertex cannot be executed and was not successfully completed previously.
         | Incomplete                of reason: IncompleteReason
         /// Can be executed.
@@ -51,7 +60,6 @@ module StateMachine =
         member IsUpToDate : bool
         member IsCompleted : bool
         member IsIncompleteReason : IncompleteReason -> bool
-        member TryGetIterationCount : unit -> int option
 
     /// Keeps status and data of a vertex as part of the StateMachine state.
     type VertexState<'d>  = {
@@ -70,7 +78,7 @@ module StateMachine =
         /// before it could be able to start.
         static member Outdated : VertexState<'d>
         /// Creates a `VertexState` instance indicating a vertex that successfully completed its evaluation.
-        static member Complete : 'd * int -> VertexState<'d>
+        static member Complete : 'd -> VertexState<'d>
 
     /// An immutable type which keeps state for the StateMachine.
     type State<'v,'d when 'v:comparison and 'v:>IVertex> =
@@ -86,7 +94,9 @@ module StateMachine =
 
     /// Describes changes that can occur with dataflow vertex.
     type VertexChanges<'d> = 
+        /// New vertex is added.
         | New of MdVertexState<VertexState<'d>>
+        /// Vertex is removed.
         | Removed 
         /// Shape of a vertex state probably is changed.
         | ShapeChanged of old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 

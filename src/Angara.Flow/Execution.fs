@@ -195,13 +195,10 @@ module Artefacts =
 //////////////////////////////////////////////
 
 type internal RuntimeAction<'v> =
-    /// Send "Start" message after a delay
     | Delay     of 'v * VertexIndex * TimeIndex
-    /// Execute a method and send "Succeeded" or "Failed" 
     | Execute   of 'v * VertexIndex * TimeIndex 
-    /// Stop the execution.
+    | Reproduce of 'v * VertexIndex * TimeIndex 
     | StopMethod of 'v * VertexIndex * TimeIndex
-    /// Forget about the method
     | Remove    of 'v
 
 module Analysis =

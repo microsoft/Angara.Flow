@@ -21,27 +21,25 @@ module StateMachine =
             | TransientInputs -> "Transient inputs"
 
     type VertexStatus =
-        | Complete                  of iteration: int    
-        | CompleteStarted           of iteration: int * startTime: TimeIndex
-        | CompleteStartRequested    of iteration: int
-        | Started                   of iteration: int * startTime: TimeIndex
+        | Complete                     
+        | CompleteStarted           of startTime: TimeIndex
+        | CompleteStartRequested    
+        | Started                   of startTime: TimeIndex
+        | Continues                 of startTime: TimeIndex
         | Incomplete                of reason: IncompleteReason
         | CanStart                  of time: TimeIndex    
         override this.ToString() =
             match this with
-            | Complete(it) -> sprintf "Complete %d " it
-            | CompleteStarted(it, time) -> sprintf "CompleteStarted %d at %d" it time
-            | CompleteStartRequested(it) -> sprintf "CompleteStartedRequested %d" it
+            | Complete -> sprintf "Complete"
+            | CompleteStarted time -> sprintf "CompleteStarted at %d" time
+            | CompleteStartRequested -> sprintf "CompleteStartedRequested"
             | Incomplete r -> "Incomplete " + r.ToString()
             | CanStart time -> sprintf "CanStart since %d" time
-            | Started (it,time) -> sprintf "Started at %d, iteration %d" time it
-        member x.IsUpToDate = match x with Complete _ | CompleteStarted _ | CompleteStartRequested _ -> true | Started (k,_) when k > 0 -> true | _ -> false
+            | Continues time -> sprintf "Continues since %d" time
+            | Started time -> sprintf "Started at %d" time
+        member x.IsUpToDate = match x with Complete _ | CompleteStarted _ | CompleteStartRequested _ -> true | Continues _ -> true | _ -> false
         member x.IsCompleted = match x with Complete _ -> true | _ -> false
         member x.IsIncompleteReason reason = match x with Incomplete r when r = reason -> true | _ -> false
-        member x.TryGetIterationCount() = 
-            match x with
-            | Complete k | CompleteStarted (k,_) | CompleteStartRequested k | Started (k,_) -> Some k
-            | _ -> None
 
     type VertexState<'d>  = {
         Status : VertexStatus
@@ -51,8 +49,8 @@ module StateMachine =
             { Status = VertexStatus.Incomplete (IncompleteReason.UnassignedInputs); Data = None }
         static member Outdated : VertexState<'d> = 
             { Status = VertexStatus.Incomplete (OutdatedInputs); Data = None }
-        static member Complete (d: 'd, iteration: int) =
-            { Status = VertexStatus.Complete (iteration); Data = Some d }
+        static member Complete (d: 'd) =
+            { Status = VertexStatus.Complete; Data = Some d }
 
     type State<'v,'d when 'v:comparison and 'v:>IVertex> =
         { Graph : DataFlowGraph<'v>
@@ -237,8 +235,9 @@ module StateMachine =
             | VertexStatus.Started _ ->
                 update v vis index // downstream is already incomplete
             | VertexStatus.Complete _
-            | VertexStatus.CompleteStarted (_, _)
-            | VertexStatus.CompleteStartRequested _ ->
+            | VertexStatus.CompleteStarted _
+            | VertexStatus.CompleteStartRequested _
+            | VertexStatus.Continues _ ->
                 update v vis index |> goFurther IncompleteReason.OutdatedInputs
         | None -> // missing, i.e. already incomplete state,changes
             state,changes
@@ -312,15 +311,15 @@ module StateMachine =
         Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Verbose, 1, "Transient {0}.[{1}] is queued to start", v, index)
         let vis = state.[v] |> MdMap.find index
         match vis.Status with
-        | CompleteStarted (k,_) | CompleteStartRequested k -> state,changes // already started
-        | Complete k -> // should be started
+        | CompleteStarted _ | CompleteStartRequested -> state,changes // already started
+        | Complete _ -> // should be started
             let artefacts = graph.Structure.InEdges v |> Seq.map(fun e -> upstreamArtefactStatus (e,index) graph state) |> Seq.concat
             let transients = artefacts |> Seq.fold(fun t s -> match s with Transient (v,vi) -> (v,vi)::t | _ -> t) List.empty |> Seq.distinct |> Seq.toList
             if transients.Length = 0 then // no transient inputs
-                let vis = { vis with Status = CompleteStarted(k,time) }
+                let vis = { vis with Status = CompleteStarted time }
                 Changes.update (state,changes) v index vis
             else
-                let vis = { vis with Status = CompleteStartRequested(k) }
+                let vis = { vis with Status = CompleteStartRequested }
                 let state,changes = Changes.update (state,changes) v index vis
                 transients |> Seq.fold(fun (s,c) t -> startTransient time t graph (s,c)) (state,changes)
         | _ -> failwith (sprintf "Unsupported execution status: %s" (vis.Status.ToString()))
@@ -458,7 +457,7 @@ module StateMachine =
         let merge (vis:VertexState<'d>) (state,changes) =
             match ri.Execution with
             | Fetch -> 
-                let state,changes = Changes.update (state, changes) ri.Vertex ri.Slice { vis with Data = None; Status = CompleteStarted (0, ri.CompletionTime) }      
+                let state,changes = Changes.update (state, changes) ri.Vertex ri.Slice { vis with Data = None; Status = CompleteStarted ri.CompletionTime }      
                 WaitItem, state, changes
             | Compute ->
                 let tryInput (res,state,changes) (e:Edge<_>,slice,ai:ArrayIndex option) =
@@ -473,7 +472,7 @@ module StateMachine =
                     q', state, changes
 
                 let res,state,changes = enumerateInputs(graph, state) (ri.Vertex, ri.Slice) |> Seq.fold tryInput (StartItem, state, changes)
-                let status = match res with StartItem -> CompleteStarted (0, ri.CompletionTime) | WaitItem -> CompleteStartRequested 0
+                let status = match res with StartItem -> CompleteStarted ri.CompletionTime | WaitItem -> CompleteStartRequested 
                 let state,changes = Changes.update (state, changes) ri.Vertex ri.Slice { vis with Data = None; Status = status }      
                 WaitItem,state,changes
 
@@ -728,14 +727,13 @@ module StateMachine =
                     | VertexStatus.Complete _ -> true
                     | _ -> false
 
-
                 let startItem (state,changes) (index, vis : VertexState<'d>) = 
                     match vis.Status with
                     | VertexStatus.CanStart t ->
                         Trace.StateMachine.TraceInformation("Method {0}.[{1}] is started", v, index)
-                        Changes.update (state, changes) v index ({ vis with Status = VertexStatus.Started(0, time) })
+                        Changes.update (state, changes) v index ({ vis with Status = VertexStatus.Started time })
 
-                    | VertexStatus.Complete k (*| VertexStatus.CompleteStartRequested (iteration=k) *)->
+                    | VertexStatus.Complete ->
                         if isOutputPartial v vis then
                             if areInputsAvailable graph state v index then
                                 Trace.StateMachine.TraceInformation("Transient method {0}.[{1}] is started", v, index)
