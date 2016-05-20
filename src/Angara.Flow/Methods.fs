@@ -2,6 +2,7 @@
 
 open Angara.Graph
 open Angara.StateMachine
+open Angara.Execution
 
 type DataFlowGraph = DataFlowGraph<Method>
 
@@ -13,8 +14,11 @@ type Function<'inp,'out>(func: 'inp -> 'out) =
 
     override x.Execute(inputs:Artefact list, _) =
         seq{
-            yield [func(inputs.[0] :?> 'inp)], None
+            yield Reproduce(inputs, null), None
         }
+
+    override x.Reproduce(inputs:Artefact list, _) =
+        [func(inputs.[0] :?> 'inp) |> box]
     
 [<Sealed; Class>]
 type IterativeFunction<'inp,'out>(func: 'inp -> 'out seq) =

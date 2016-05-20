@@ -30,16 +30,16 @@ module StateMachine =
     /// Indicates how the state machine considers a vertex item.
     type VertexStatus =
         /// The vertex execution has successfully completed.
-        | Complete             of iterations: int                
+        | Complete                        
         /// The vertex execution has successfully completed,
         /// but the output is missing in the dataflow state,
         /// so the vertex is being executed again to reproduce the execution output.
         /// The `startTime` contains the state machine time index when the vertex entered this status.
-        | Reproduces           of iterations: int * startTime: TimeIndex
+        | Reproduces           of startTime: TimeIndex
         /// The vertex execution has successfully completed but the output is missing in the dataflow state,
         /// so the vertex is required to be executed again, but it cannot while there is an input vertex
         /// which also has no state and must be executed.
-        | ReproduceRequested   of iterations: int
+        | ReproduceRequested   
         /// The vertex is being executed and hasn't produce its output yet,
         /// so the dependent vertices cannot start.
         /// It entered this status at the given `startTime`.
@@ -50,8 +50,8 @@ module StateMachine =
         /// it is in the `Started` status; when it succeeds, it goes to the `Continues` status so
         /// that the dependent vertices can try to start.
         /// It entered this status at the given `startTime`.
-        | Continues                 of iterations: int * startTime: TimeIndex
-        | ContinueRequested         of iterations: int
+        | Continues                 of startTime: TimeIndex
+        | ContinueRequested         
         /// The vertex cannot be executed and was not successfully completed previously.
         | Incomplete                of reason: IncompleteReason
         /// Can be executed.
@@ -136,9 +136,7 @@ module StateMachine =
     type StartMessage<'v> =
         { Vertex: 'v
           /// Specified which vertex slice is to be evaluated. 
-          /// If index is not provided, all slices of the vertex are expected to be
-          /// in "CanStart" status and all are started; otherwise, nothing happens and message is replied with "false".
-          Index: VertexIndex option
+          Index: VertexIndex
           /// If given, the time when the vertex turned to the `CanStart` status must equal `CanStartTime` of the message;
           /// otherwise, the vertex will not start and the replied value is `false`.
           /// This allows to guarantee that the vertex of the observed state is started.
@@ -146,7 +144,7 @@ module StateMachine =
 
     type SucceededResult<'d> = 
         /// Contains results of the iteration with the given number.
-        | IterationResult of data:'d * iteration : int
+        | IterationResult of result:'d
         /// Indicates that the previous SucceededMessage was the last iteration, though its `isFinal` was `false`.
         | NoMoreIterations
 
