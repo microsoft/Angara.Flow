@@ -1,4 +1,7 @@
-
+NUGET
+  remote: https://www.nuget.org/api/v2
+  specs:
+    MSFT.ParallelExtensionsExtras (1.2)
 
 GROUP Test
 NUGET

@@ -9,7 +9,7 @@ open Angara.Option
 open Angara.Trace
 
 type Artefact = obj
-
+type MethodCheckpoint = obj
 type Output = 
     | Full    of Artefact list
     | Partial of (Artefact option) list
@@ -35,12 +35,12 @@ type Method(inputs: Type list, outputs: Type list) =
     override x.GetHashCode() = 
         failwith "not implemented"
                 
-
-    abstract Execute : Artefact list * obj option -> (Artefact list * obj option) seq
+    abstract ExecuteFrom : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
+    abstract Reproduce: Artefact list * MethodCheckpoint -> Artefact list
        
 
 [<Class>] 
-type MethodVertexData (output: Output, p: obj option) =
+type MethodVertexData (output: Output, checkpoint: MethodCheckpoint option) =
     interface IVertexData with
         member x.Contains(outRef) = 
             match output with
@@ -53,7 +53,7 @@ type MethodVertexData (output: Output, p: obj option) =
                 | _ -> 0)
         
     member x.Output = output
-    member x.InternalData = p
+    member x.Checkpoint = checkpoint
 
     member x.TryGet(outRef) : Artefact option = 
         match output with
@@ -62,6 +62,7 @@ type MethodVertexData (output: Output, p: obj option) =
         | _ -> None
     
     static member Empty = MethodVertexData(Partial [], None)
+
  
 type Input = 
     | NotAvailable
@@ -269,17 +270,35 @@ module Analysis =
 open Angara
 open Angara.Observable
 open System.Collections.Generic
+open System.Threading.Tasks.Schedulers
 
 type internal Progress<'v>(v:'v, i:VertexIndex, progressReported : ObservableSource<'v*VertexIndex*float>) =
     interface IProgress<float> with
         member x.Report(p: float) = progressReported.Next(v,i,p)
 
+// TODO: it is the Scheduler who should prepare the RuntimeContext for the target function.
 [<AbstractClass>]
-type Scheduler =
+type Scheduler() =
     abstract Start : (unit -> unit) -> unit
 
-    static member ThreadPool() : Scheduler = 
-        failwith "not implemented"
+    static member ThreadPool() : Scheduler = upcast ThreadPoolScheduler()
+        
+and [<Class>] ThreadPoolScheduler() =
+    inherit Scheduler()
+
+    static let scheduler = LimitedConcurrencyLevelTaskScheduler(System.Environment.ProcessorCount)
+    static do Trace.Runtime.TraceInformation(sprintf "ThreadPoolScheduler limits concurrency level with %d" scheduler.MaximumConcurrencyLevel)
+    static let mutable ExSeq = 0L   
+    
+    override x.Start (f: unit -> unit) =
+        let id = System.Threading.Interlocked.Increment(&ExSeq)        
+        try
+            Trace.Runtime.TraceEvent(Trace.Event.Start, RuntimeId.SchedulerExecution, sprintf "Execution %d started" id)
+            f()
+            Trace.Runtime.TraceEvent(Trace.Event.Stop, RuntimeId.SchedulerExecution, sprintf "Execution %d finished" id)
+        with ex ->
+            Trace.Runtime.TraceEvent(Trace.Event.Error, RuntimeId.SchedulerExecution, sprintf "Execution %d failed: %O" id ex)
+            raise ex
 
 [<Sealed>]
 type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction<Method> list>, scheduler : Scheduler) =
@@ -317,8 +336,8 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
                 }, cts.Token)
         else run()
        
-    let postIterationSucceeded v index time iteration result =
-        Message.Succeeded { Vertex = v; Index = index; StartTime = time; Result = SucceededResult.IterationResult(result, iteration) }
+    let postIterationSucceeded v index time result =
+        Message.Succeeded { Vertex = v; Index = index; StartTime = time; Result = SucceededResult.IterationResult result }
         |> messages.Next
         
     let postNoMoreIterations v index time = 
@@ -352,24 +371,51 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
 
         let inputs = (v, index) |> Artefacts.getInputs (state.FlowState, state.Graph)
         try
-            let n, data = 
-                match state.FlowState |> DataFlowState.tryGet (v,index) with
-                | Some vis -> vis.Status.TryGetIterationCount(), vis.Data |> Option.bind(fun d -> d.InternalData)
-                | None -> None, None
-            let n = defaultArg n 0
+            let checkpoint =
+                opt {
+                    let! vis = state.FlowState |> DataFlowState.tryGet (v,index)
+                    let! data = vis.Data
+                    return! data.Checkpoint
+                } 
             let inArtefacts = inputs |> convertArrays (v:>IVertex).Inputs
 
-            v.Execute(inArtefacts, data)
-            |> Seq.skip n // if resuming after iteration `n`
+            v.ExecuteFrom(inArtefacts, checkpoint)
             |> Seq.takeWhile (fun _ -> not cancellationToken.IsCancellationRequested)
-            |> Seq.iteri (fun i (output,internalData) -> MethodVertexData(Output.Full output, internalData) |> postIterationSucceeded v index time (n+i))
+            |> Seq.iteri (fun i (output,chk) -> MethodVertexData(Output.Full output, Some chk) |> postIterationSucceeded v index time)
                 
             if not cancellationToken.IsCancellationRequested then 
                 postNoMoreIterations v index time
 
             Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "SUCCEEDED execution of %O.[%A]" v index)
         with ex -> 
-            Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "FAILED execution of %O.[%A]" v index)
+            Trace.Runtime.TraceEvent(Event.Error, RuntimeId.Evaluation, sprintf "FAILED execution of %O.[%A]" v index)
+            ex |> postFailure v index time
+
+    let buildReproduce (v:Method,index,time,state:State<Method,MethodVertexData>) = fun() ->
+        Trace.Runtime.TraceEvent(Event.Start, RuntimeId.Evaluation, sprintf "Reproducing of %O.[%A]" v index)
+                
+        let cancellationToken = cts.Token
+        RuntimeContext.replaceContext // todo: move to the scheduler
+            { Token = cancellationToken
+              ProgressReporter = progress v index } |> ignore
+
+        let inputs = (v, index) |> Artefacts.getInputs (state.FlowState, state.Graph)
+        try
+            let checkpoint =
+                opt {
+                    let! vis = state.FlowState |> DataFlowState.tryGet (v,index)
+                    let! data = vis.Data
+                    return! data.Checkpoint
+                } 
+            let inArtefacts = inputs |> convertArrays (v:>IVertex).Inputs
+
+            let outArtefacts = v.Reproduce(inArtefacts, checkpoint)
+            MethodVertexData(Output.Full outArtefacts, checkpoint)
+            |> postIterationSucceeded v index time             
+
+            Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "SUCCEEDED reproducing of %O.[%A]" v index)
+        with ex -> 
+            Trace.Runtime.TraceEvent(Event.Error, RuntimeId.Evaluation, sprintf "FAILED reproducing of %O.[%A]" v index)
             ex |> postFailure v index time
 
     let performAction (state : State<Method,MethodVertexData>) (action : RuntimeAction<Method>) = 
@@ -387,6 +433,9 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
             scheduler.Start func
             cancel (v,slice) cancels
             cancels.Add((v,slice), cts)
+
+        | Reproduce (v,slice,time) ->
+            
 
         | Remove v -> 
             cancelAll v cancels

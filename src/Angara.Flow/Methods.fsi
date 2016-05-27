@@ -36,8 +36,8 @@ type ResumableIterativeFunction<'inp,'out,'resume> =
     inherit Method
     new : ('inp * ('out * 'resume) option -> ('out * 'resume) seq)
 
-/// FlowFunction method execution is evaluation of a certain dataflow.
-[<Sealed; Class>]
-type FlowFunction = 
-    inherit Method
-    new : DataFlowGraph * DataFlowState * (Method * InputRef) list * (Method * OutputRef) list
+///// FlowFunction method execution is evaluation of a certain dataflow.
+//[<Sealed; Class>]
+//type FlowFunction = 
+//    inherit Method
+//    new : DataFlowGraph * DataFlowState * (Method * InputRef) list * (Method * OutputRef) list

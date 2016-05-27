@@ -80,4 +80,11 @@
   </Choose>
   <Import Project="$(FSharpTargetsPath)" />
   <Import Project="..\..\.paket\paket.targets" />
+  <ItemGroup>
+    <Reference Include="ParallelExtensionsExtras">
+      <HintPath>..\..\packages\MSFT.ParallelExtensionsExtras\lib\ParallelExtensionsExtras.dll</HintPath>
+      <Private>True</Private>
+      <Paket>True</Paket>
+    </Reference>
+  </ItemGroup>
 </Project>

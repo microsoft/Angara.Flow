@@ -36,7 +36,7 @@ type Method =
     abstract ExecuteFrom : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
 
     /// Reproduces the output artefacts corresponding to the checkpoint and the given input artefacts.
-    abstract Reproduce: Artefact list * MethodCheckpoint -> Artefact list
+    //abstract Reproduce: Artefact list * MethodCheckpoint -> Artefact list
 
 /// Represents output artefacts of a method.
 /// An artefact can be missing, e.g. if the dataflow snapshot couldn't be restored completely.
