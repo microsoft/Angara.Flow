@@ -12,7 +12,8 @@ type GraphBuilder() =
     
     member x.Bind(expr: Graph, follow: Node -> Graph) : Graph =
         let followGraph = follow (expr.Target.Value)
-        followGraph
+        let allNodes = expr.Nodes @ followGraph.Nodes |> List.distinct
+        { Nodes = allNodes; Target = followGraph.Target }
 
     member x.ReturnFrom(expr: Graph) = expr
 

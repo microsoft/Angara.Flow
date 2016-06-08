@@ -134,8 +134,8 @@ module StateMachine =
         | VertexStatus.Reproduces _
         | VertexStatus.ReproduceRequested
         | VertexStatus.Continues _ ->
-            let state' = update state v (VertexStatus.Incomplete reason)
-            v |> state.Graph.Structure.OutEdges |> Seq.fold (fun s e -> makeIncomplete state' e.Target IncompleteReason.OutdatedInputs) state
+            let state2 = update state v (VertexStatus.Incomplete reason)
+            v |> state.Graph.Structure.OutEdges |> Seq.fold (fun s e -> makeIncomplete s e.Target IncompleteReason.OutdatedInputs) state2
     
 
     let downstreamIncomplete (state : State) (v : Vertex) reason : State =
