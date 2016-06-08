@@ -4,18 +4,17 @@
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>
-    <TargetFrameworkProfile />
   </PropertyGroup>
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <SchemaVersion>2.0</SchemaVersion>
-    <ProjectGuid>c144aef1-c0f1-42cc-9fa1-7b4cd54623cc</ProjectGuid>
+    <ProjectGuid>2e50f4ab-6f81-4452-8115-70e2f5a35961</ProjectGuid>
     <OutputType>Library</OutputType>
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-    <RootNamespace>Angara.Flow.Tests</RootNamespace>
-    <AssemblyName>Angara.Flow.Tests</AssemblyName>
+    <RootNamespace>StateMachineMockupTests</RootNamespace>
+    <AssemblyName>StateMachineMockupTests</AssemblyName>
     <TargetFrameworkVersion>v4.5.2</TargetFrameworkVersion>
     <Name>FSharpTest</Name>
     <SolutionDir Condition="$(SolutionDir) == '' Or $(SolutionDir) == '*Undefined*'">..\</SolutionDir>
@@ -29,7 +28,7 @@
     </When>
     <Otherwise>
       <PropertyGroup>
-        <TargetFSharpCoreVersion>4.4.0.0</TargetFSharpCoreVersion>
+        <TargetFSharpCoreVersion>4.3.1.0</TargetFSharpCoreVersion>
       </PropertyGroup>
     </Otherwise>
   </Choose>
@@ -59,14 +58,11 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="FsCheckAddin.fs">
-      <Paket>True</Paket>
-    </Compile>
-    <Compile Include="GraphTests.fs" />
-    <Compile Include="StateMachineTests.fs" />
-    <None Include="Script.fsx" />
-    <None Include="paket.references" />
+    <Compile Include="NUnitRunner.fs" />
+    <Compile Include="StateOperations.fs" />
+    <Compile Include="StateMachineMockupTests.fs" />
     <None Include="App.config" />
+    <None Include="paket.references" />
   </ItemGroup>
   <Choose>
     <When Condition="'$(VisualStudioVersion)' == '11.0'">
@@ -81,14 +77,6 @@
     </Otherwise>
   </Choose>
   <Import Project="$(FSharpTargetsPath)" />
-  <Import Project="..\..\.paket\paket.targets" />
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\Angara.Flow\Angara.Flow.fsproj">
-      <Name>Angara.Flow</Name>
-      <Project>{ea4027de-6620-4655-a2c6-377e7793685b}</Project>
-      <Private>True</Private>
-    </ProjectReference>
-  </ItemGroup>
   <Choose>
     <When Condition="$(TargetFrameworkIdentifier) == '.NETFramework' And ($(TargetFrameworkVersion) == 'v4.5' Or $(TargetFrameworkVersion) == 'v4.5.1' Or $(TargetFrameworkVersion) == 'v4.5.2' Or $(TargetFrameworkVersion) == 'v4.5.3' Or $(TargetFrameworkVersion) == 'v4.6' Or $(TargetFrameworkVersion) == 'v4.6.1' Or $(TargetFrameworkVersion) == 'v4.6.2')">
       <ItemGroup>
@@ -230,5 +218,12 @@
       <Private>True</Private>
       <Paket>True</Paket>
     </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StateMachineMockup\StateMachineMockup.fsproj">
+      <Name>StateMachineMockup</Name>
+      <Project>{f6803eef-9181-4120-94c8-707e31b9473b}</Project>
+      <Private>True</Private>
+    </ProjectReference>
   </ItemGroup>
 </Project>

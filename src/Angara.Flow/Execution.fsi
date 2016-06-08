@@ -9,11 +9,7 @@ open Angara.StateMachine
 type Artefact = obj
 
 /// Contains data identifying a certain reproducible stage of the execution.
-/// It should be sufficient for and allow the same Method to:
-/// - reproduce the outputs corresponding to the stage;
-/// - continue execution starting from the checkpoint.
 /// Actual type of the checkpoint depends on the Method; a Method may not use the checkpoints and return `null`.
-/// It means that the Method has only one stage but still can reproduce that outputs of that stage.
 type MethodCheckpoint = obj
 
 /// A graph vertex which can be executed.
@@ -24,19 +20,16 @@ type Method =
     interface IVertex
     interface IComparable // todo: how to compare methods?
 
-    /// Starts execution of the Method from the given checkpoint.
+    /// Applies the method to the given input artefacts.
     /// Returns a sequence of checkpoints; for each checkpoint there are output artefacts and the corresponding checkpoint,
-    /// sufficient to reproduce the corresponding outputs and continue execution when given the input artefacts and the checkpoint value.
+    /// which can allow to resume iteration not from the beginning.
     /// If the method doesn't split the execution into the stages identified by checkpoints,
     /// it should returns a sequence of a single element and `null` as checkpoint.
-    /// If the checkpoint is null, the Method should start execution from the begginning.
+    /// If the checkpoint is null, the Method should start execution from the beginning.
     /// Prohibited:
     /// - return an empty sequence;
     /// - return checkpoint value that doesn't allow to reproduce the corresponding artefacts deterministically.
-    abstract ExecuteFrom : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
-
-    /// Reproduces the output artefacts corresponding to the checkpoint and the given input artefacts.
-    //abstract Reproduce: Artefact list * MethodCheckpoint -> Artefact list
+    abstract Execute : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
 
 /// Represents output artefacts of a method.
 /// An artefact can be missing, e.g. if the dataflow snapshot couldn't be restored completely.

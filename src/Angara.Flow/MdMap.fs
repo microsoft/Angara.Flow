@@ -5,6 +5,10 @@
 type internal MdMapTree<'key, 'value when 'key : comparison> = 
     | Value of 'value
     | Map of Map<'key, MdMapTree<'key, 'value>>
+    override x.ToString() =
+        match x with
+        | Value v -> sprintf "Value %A" v
+        | Map map -> sprintf "Map (%A)" map
 
 [<RequireQualifiedAccess>]
 module internal MdMapTree =
@@ -128,6 +132,8 @@ type MdMap<'key, 'value when 'key : comparison> internal (tree : MdMapTree<'key,
     member x.AsScalar() = match tree with MdMapTree.Value v -> v | MdMapTree.Map _ -> invalidOp "The instance is not a scalar"
 
     member internal x.Tree = tree
+
+    override x.ToString() = tree.ToString()
 
 
 [<RequireQualifiedAccess>]

@@ -29,36 +29,33 @@ module StateMachine =
 
     /// Indicates how the state machine considers a vertex item.
     type VertexStatus =
-        /// The vertex execution has successfully completed.
-        | Complete                        
+        /// The vertex execution has successfully completed all iterations.
+        | Final                        
+        /// The input methods are "final", "paused" or "continues"; 
+        /// and the method isn't being executed but previously produced the output at least one time.
+        | Paused 
+        /// Can be executed.
+        /// `time` keeps time index when the vertex entered this status.
+        | CanStart                  of time: TimeIndex 
+        /// The vertex is being executed and hasn't produce its output yet,
+        /// so the dependent vertices cannot start.
+        /// It entered this status at the given `startTime`.
+        | Started                   of startTime: TimeIndex      
+        /// Method is being executed and it is already produced first output.
+        | Continues                 of startTime: TimeIndex      
         /// The vertex execution has successfully completed,
         /// but the output is missing in the dataflow state,
         /// so the vertex is being executed again to reproduce the execution output.
         /// The `startTime` contains the state machine time index when the vertex entered this status.
-        | Reproduces           of startTime: TimeIndex
+        | Reproduces                of startTime: TimeIndex
         /// The vertex execution has successfully completed but the output is missing in the dataflow state,
         /// so the vertex is required to be executed again, but it cannot while there is an input vertex
         /// which also has no state and must be executed.
         | ReproduceRequested   
-        /// The vertex is being executed and hasn't produce its output yet,
-        /// so the dependent vertices cannot start.
-        /// It entered this status at the given `startTime`.
-        | Started                   of startTime: TimeIndex
-        /// The vertex is being executed but already produced its output one or more times,
-        /// so the dependent vertices can start.
-        /// This state is reachable for iterative methods. During the first iteration, 
-        /// it is in the `Started` status; when it succeeds, it goes to the `Continues` status so
-        /// that the dependent vertices can try to start.
-        /// It entered this status at the given `startTime`.
-        | Continues                 of startTime: TimeIndex
-        | ContinueRequested         
         /// The vertex cannot be executed and was not successfully completed previously.
         | Incomplete                of reason: IncompleteReason
-        /// Can be executed.
-        /// `time` keeps time index when the vertex entered this status.
-        | CanStart                  of time: TimeIndex    
+   
         member IsUpToDate : bool
-        member IsCompleted : bool
         member IsIncompleteReason : IncompleteReason -> bool
 
     /// Keeps status and data of a vertex as part of the StateMachine state.
