@@ -147,8 +147,8 @@ module StateMachine =
             match vertexStatus state v with
             | VertexStatus.CanStart _ -> state
             | _ ->
-                let state' = update state v (VertexStatus.CanStart state.TimeIndex)
-                downstreamIncomplete state' v IncompleteReason.OutdatedInputs
+                let state2 = update state v (VertexStatus.CanStart state.TimeIndex)
+                downstreamIncomplete state2 v IncompleteReason.OutdatedInputs
 
         let startTransient (state : State) (v : Vertex) : State = 
             failwith "transient methods not implemented"
@@ -191,6 +191,37 @@ module StateMachine =
     let downstreamStartOrIncomplete (state : State) (v : Vertex) : State =
         v |> state.Graph.Structure.OutEdges |> Seq.fold (fun s e -> makeStartOrIncomplete state e.Target) state
 
+
+    let downstreamStartOrReproduce (state : State) (v : Vertex) : State =
+        let allInputs w = 
+            state.Graph.Structure.InEdges w 
+            |> Seq.forall(fun e -> 
+                match getUpstreamArtefactStatus state e with
+                | Some Transient -> false
+                | _ -> true) 
+
+        v |> state.Graph.Structure.OutEdges |> Seq.fold (fun s e -> 
+            let w = e.Target
+            match vertexStatus state w with
+            | VertexStatus.ReproduceRequested -> update state w (VertexStatus.Reproduces state.TimeIndex)
+            | VertexStatus.Final_MissingInputOnly when allInputs w -> update state w VertexStatus.Final  
+            | VertexStatus.Final_MissingInputOutput when allInputs w -> update state w VertexStatus.Final_MissingOutputOnly  
+            
+            | VertexStatus.Paused_MissingInputOnly when allInputs w -> update state w VertexStatus.Paused  
+            | VertexStatus.Paused_MissingInputOutput when allInputs w -> update state w VertexStatus.Paused_MissingOutputOnly              
+
+            | VertexStatus.Paused 
+            | VertexStatus.Paused_MissingOutputOnly
+            | VertexStatus.Paused_MissingInputOnly
+            | VertexStatus.Paused_MissingInputOutput
+            | VertexStatus.Final_MissingInputOnly 
+            | VertexStatus.Final_MissingInputOutput            
+            | VertexStatus.Final_MissingOutputOnly
+            | VertexStatus.Final -> state // no changes
+
+            | _ -> makeStartOrIncomplete state w // try start            
+            ) state
+
     type Message =
     | Start of Vertex
     | Iteration of Vertex
@@ -228,6 +259,7 @@ module StateMachine =
             | NoAction -> state3
             | DownstreamIncomplete r -> downstreamIncomplete state3 v r
             | DownstreamStartOrIncomplete -> downstreamStartOrIncomplete state3 v
+            | DownstreamStartOrReproduce -> downstreamStartOrReproduce state3 v
             | _ -> failwithf "Transition action %A not implemented" action
 
         state4
