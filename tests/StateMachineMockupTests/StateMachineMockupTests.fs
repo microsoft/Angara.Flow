@@ -10,7 +10,7 @@ open StateOperations
 
 
 [<Test>]
-let ``a -> b, transitions start -> iteration -> succeeded``() = 
+let ``a -> b, transitions start, iteration, succeeded``() = 
     let g = graph {
         let! a = node0 "a"
         return! node1 "b" a
@@ -60,6 +60,27 @@ let ``a -> b -> c, iteration of 'a' properly invalidates downstream``() =
     state (g, ["a", VertexStatus.Continues 0UL; "b", VertexStatus.Continues 0UL; "c", VertexStatus.Continues 0UL], 0UL)
     |> iteration "a"
     |> equals (state (g, ["a", VertexStatus.Continues 0UL; "b", VertexStatus.CanStart 1UL; "c", VertexStatus.Incomplete IncompleteReason.OutdatedInputs], 1UL))
+    |> ignore
+
+
+[<Test>]
+let ``a -> b, pause then resume``() = 
+    let g = graph {
+        let! a = node0 "a"
+        return! node1 "b" a
+    }
+
+    state (g, ["a", VertexStatus.Continues 1UL; "b", VertexStatus.Started 4UL], 4UL)
+    |> stop "a"                                            
+    |> equals (state (g, ["a", VertexStatus.Paused; "b", VertexStatus.Started 4UL], 5UL))
+    |> iteration "b"
+    |> equals (state (g, ["a", VertexStatus.Paused; "b", VertexStatus.Continues 4UL], 6UL))
+    |> succeeded "b"
+    |> equals (state (g, ["a", VertexStatus.Paused; "b", VertexStatus.Final], 7UL))
+    |> start "a"
+    |> equals (state (g, ["a", VertexStatus.Continues 8UL; "b", VertexStatus.Final], 8UL))
+    |> iteration "a"
+    |> equals (state (g, ["a", VertexStatus.Continues 8UL; "b", VertexStatus.CanStart 9UL], 9UL))
     |> ignore
 
 

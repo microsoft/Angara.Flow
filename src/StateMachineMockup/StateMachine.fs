@@ -69,6 +69,11 @@ module VertexTransitions =
         | VertexStatus.Reproduces t -> VertexStatus.Final, DownstreamStartOrReproduce
         | _ as status -> incorrectTransition "succeeded" status
 
+    let stop = function
+        | VertexStatus.Started t -> VertexStatus.Incomplete IncompleteReason.Stopped, NoAction
+        | VertexStatus.Continues t -> VertexStatus.Paused, NoAction
+        | _ as status -> incorrectTransition "iteration" status
+
 
 
 module StateMachine =
@@ -243,6 +248,7 @@ module StateMachine =
             | Failed (v, exn) -> v, status v |> fail exn
             | Iteration v -> v, status v |> iteration 
             | Succeeded v -> v, status v |> succeeded 
+            | Stop v -> v, status v |> stop
             | _ as t -> failwithf "transition %A not implemented" t
         let state2 = update state v vs
 

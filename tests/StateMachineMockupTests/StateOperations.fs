@@ -34,6 +34,9 @@ let iteration (nodeName : string) (state : State, nameToVertex: Map<string, Vert
 let succeeded (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Succeeded (nameToVertex.[nodeName])), nameToVertex
 
+let stop (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) =
+    state |> transition (Message.Stop (nameToVertex.[nodeName])), nameToVertex
+
 
 let equals (stateExp : State, nameToVertexExp: Map<string, Vertex>) (stateAct : State, nameToVertexAct: Map<string, Vertex>) =
     Assert.AreEqual(nameToVertexExp, nameToVertexAct, sprintf "Different names (%d)" stateExp.TimeIndex)
