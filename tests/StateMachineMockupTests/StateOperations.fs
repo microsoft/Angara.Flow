@@ -38,7 +38,7 @@ let stop (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) 
     state |> transition (Message.Stop (nameToVertex.[nodeName])), nameToVertex
 
 
-let equals (stateExp : State, nameToVertexExp: Map<string, Vertex>) (stateAct : State, nameToVertexAct: Map<string, Vertex>) =
+let check (stateExp : State, nameToVertexExp: Map<string, Vertex>) (stateAct : State, nameToVertexAct: Map<string, Vertex>) =
     Assert.AreEqual(nameToVertexExp, nameToVertexAct, sprintf "Different names (%d)" stateExp.TimeIndex)
     Assert.AreEqual(stateExp.Graph, stateAct.Graph, sprintf "Different graphs (%d)" stateExp.TimeIndex)
     Assert.AreEqual(stateExp.FlowState, stateAct.FlowState, sprintf "Different states (%d)" stateExp.TimeIndex)

@@ -30,7 +30,7 @@ type Vertex(name : string, inputs, outputs) =
 
 module VertexTransitions =
 
-    type FurtherAction =
+    type TransitionEffect =
     | NoAction
     | DownstreamStartOrIncomplete
     | DownstreamStartOrReproduce
@@ -81,6 +81,8 @@ module VertexTransitions =
         | VertexStatus.Started t -> VertexStatus.Incomplete IncompleteReason.Stopped, NoAction
         | VertexStatus.Continues t -> VertexStatus.Paused, NoAction
         | _ as status -> incorrectTransition "iteration" status
+
+open VertexTransitions
 
 
 
@@ -155,7 +157,7 @@ module StateMachine =
         v |> state.Graph.Structure.OutEdges |> Seq.fold (fun s e -> makeIncomplete state e.Target reason) state
         
 
-    let makeStartOrIncomplete (state : State) (v : Vertex) : State =
+    let rec makeStartOrIncomplete (state : State) (v : Vertex) : State =
         let makeCanStart state v =
             match vertexStatus state v with
             | VertexStatus.CanStart _ -> state
@@ -163,9 +165,7 @@ module StateMachine =
                 let state2 = update state v (VertexStatus.CanStart state.TimeIndex)
                 downstreamIncomplete state2 v IncompleteReason.OutdatedInputs
 
-        let startTransient (state : State) (v : Vertex) : State = 
-            failwith "transient methods not implemented"
-
+        let startTransient = makeStartOrReproduce 
 
         let allInputsAssigned (v : Vertex) = 
             let n = v.Inputs.Length
@@ -201,11 +201,11 @@ module StateMachine =
         | _ -> // has unassigned inputs
             makeIncomplete state v IncompleteReason.UnassignedInputs
 
-    let downstreamStartOrIncomplete (state : State) (v : Vertex) : State =
+    and downstreamStartOrIncomplete (state : State) (v : Vertex) : State =
         v |> state.Graph.Structure.OutEdges |> Seq.fold (fun s e -> makeStartOrIncomplete state e.Target) state
 
 
-    let downstreamStartOrReproduce (state : State) (v : Vertex) : State =
+    and downstreamStartOrReproduce (state : State) (v : Vertex) : State =
         let allInputs w = 
             state.Graph.Structure.InEdges w 
             |> Seq.forall(fun e -> 
@@ -235,6 +235,64 @@ module StateMachine =
             | _ -> makeStartOrIncomplete state w // try start            
             ) state
 
+    /// Input: `v` is either Final_* or Paused_*
+    /// If the vertex has missing output, it is either going to Reproduces, or Started (with downstream invalidated).
+    /// If the vertex also has missing input, the function is called recursively for the input.
+    and upstreamStartOrReproduce (state : State) (v : Vertex) : State =
+        state.Graph.Structure.InEdges v |> Seq.fold(fun s e -> makeStartOrReproduce s e.Source) state
+
+    /// Input: `v` is either Final_* or Paused_*
+    /// If the vertex has missing output, it is either going to Reproduces, or Started (with downstream invalidated).
+    /// If the vertex also has missing input, the function is called recursively for the input.
+    and makeStartOrReproduce (state : State) (v : Vertex) : State =
+        let apply (status, effect) = applyTransition state v status effect
+
+        // Since `v` is final or paused, all inputs are assigned and also are either final or paused.
+        match vertexStatus state v with
+        // These statuses have all inputs and can be started
+        | VertexStatus.Final_MissingOutputOnly -> (VertexStatus.Reproduces state.TimeIndex, NoAction) |> apply
+        | VertexStatus.Paused_MissingOutputOnly -> (VertexStatus.Started state.TimeIndex, DownstreamIncomplete IncompleteReason.OutdatedInputs) |> apply
+
+        // These statuses has missing inputs and require recursive reproduction
+        | VertexStatus.Final_MissingInputOutput -> (VertexStatus.ReproduceRequested, UpstreamStartOrReproduce) |> apply
+        | VertexStatus.Paused_MissingInputOutput -> (VertexStatus.Incomplete IncompleteReason.TransientInputs, UpstreamStartOrReproduce) |> apply
+        
+        // The outputs are presented
+        | VertexStatus.Final_MissingInputOnly
+        | VertexStatus.Paused_MissingInputOnly 
+        | VertexStatus.Reproduces _
+        | VertexStatus.ReproduceRequested
+        | VertexStatus.Continues _ 
+        | VertexStatus.Final
+        | VertexStatus.Paused  -> state // nothing to do
+
+        // This status could be if the transient method has multiple inputs and one of them depends on another and it is paused,
+        // so its restart makes the other incomplete.
+        | VertexStatus.Incomplete _
+        | VertexStatus.CanStart _
+        | VertexStatus.Started _ -> state // nothing to do, 
+
+    and applyTransition (state : State) (v : Vertex) (targetState : VertexStatus) (effect : TransitionEffect) =
+        let state2 = update state v targetState
+
+        // State entry action:
+        let state3 =
+            match targetState with 
+            | VertexStatus.Incomplete _
+            | VertexStatus.CanStart _ -> downstreamIncomplete state2 v (IncompleteReason.OutdatedInputs)
+            | _ -> state2
+
+        // Transition effect:
+        let state4 =
+            match effect with
+            | NoAction -> state3
+            | DownstreamIncomplete r -> downstreamIncomplete state3 v r
+            | DownstreamStartOrIncomplete -> downstreamStartOrIncomplete state3 v
+            | DownstreamStartOrReproduce -> downstreamStartOrReproduce state3 v
+            | UpstreamStartOrReproduce -> upstreamStartOrReproduce state3 v
+
+        state4
+
     type Response<'a> =
         | Success       of 'a
         | Exception     of System.Exception
@@ -254,8 +312,7 @@ module StateMachine =
         let state = { state with TimeIndex = state.TimeIndex  + 1UL }
         let status = vertexStatus state
 
-        // New vertex status
-        let v, (vs, action) =
+        let v, (vs, transitionEffect) =
             match m with
             | Start v -> v, status v |> start state.TimeIndex
             | Failed (v, exn, startTime) -> v, status v |> fail exn startTime
@@ -263,23 +320,7 @@ module StateMachine =
             | Succeeded (v, startTime) -> v, status v |> succeeded startTime
             | Stop v -> v, status v |> stop
             | Alter -> failwithf "transition Alter not implemented"
-        let state2 = update state v vs
-
-        // Entry actions:
-        let state3 =
-            match vs with 
-            | VertexStatus.Incomplete _
-            | VertexStatus.CanStart _ -> downstreamIncomplete state2 v (IncompleteReason.OutdatedInputs)
-            | _ -> state2
-
-        // Transition actions:
-        let state4 =
-            match action with
-            | NoAction -> state3
-            | DownstreamIncomplete r -> downstreamIncomplete state3 v r
-            | DownstreamStartOrIncomplete -> downstreamStartOrIncomplete state3 v
-            | DownstreamStartOrReproduce -> downstreamStartOrReproduce state3 v
-            | _ -> failwithf "Transition action %A not implemented" action
-
-        state4
         
+        let state2 = applyTransition state v vs transitionEffect
+        
+        state2
