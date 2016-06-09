@@ -16,7 +16,7 @@ open StateOperations
 [<Test>]
 let ``Conducts simple method execution``() = 
     let g = graph {
-        return! node0 "a" 
+        return! node1 "a" []
     }
 
                         state (g, ["a", CanStart 0UL], 0UL)
@@ -31,7 +31,7 @@ let ``Conducts simple method execution``() =
 [<Test>]
 let ``Obsolete 'succeeded' message is ignored``() = 
     let g = graph {
-        return! node0 "a" 
+        return! node1 "a" []
     }
 
                         state (g, ["a", CanStart 0UL], 0UL)
@@ -48,7 +48,7 @@ let ``Obsolete 'succeeded' message is ignored``() =
 [<Test>]
 let ``Obsolete 'iteration' message is ignored``() = 
     let g = graph {
-        return! node0 "a" 
+        return! node1 "a" []
     }
 
                         state (g, ["a", CanStart 0UL], 0UL)
@@ -62,7 +62,7 @@ let ``Obsolete 'iteration' message is ignored``() =
 [<ExpectedException(typeof<System.InvalidOperationException>)>]
 let ``Final method cannot be started``() = 
     let g = graph {
-        return! node0 "a" 
+        return! node1 "a" []
     }
 
                         state (g, ["a", Final], 0UL)
@@ -78,8 +78,8 @@ let ``Final method cannot be started``() =
 [<Test>]
 let ``Method iteration enables its downstream method to start``() = 
     let g = graph {
-        let! a = node0 "a"
-        return! node1 "b" a
+        let! a = node1 "a" []
+        return! node1 "b" [a]
     }
 
                         state (g, ["a", CanStart 0UL; "b", Incomplete OutdatedInputs], 0UL)
@@ -96,8 +96,8 @@ let ``Method iteration enables its downstream method to start``() =
 [<Test>]
 let ``Next method iteration cancels the possible execution of its downstream method``() = 
     let g = graph {
-        let! a = node0 "a"
-        return! node1 "b" a
+        let! a = node1 "a" []
+        return! node1 "b" [a]
     }
 
                         state (g, ["a", CanStart 0UL; "b", Incomplete OutdatedInputs], 0UL)
@@ -119,9 +119,9 @@ let ``Next method iteration cancels the possible execution of its downstream met
 [<Test>]
 let ``Method iteration cancels the execution of the immediate downstream method and makes other downstream methods incomplete``() = 
     let g = graph {
-        let! a = node0 "a"
-        let! b = node1 "b" a
-        return! node1 "c" b
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [b]
     }
 
                         state (g, ["a", Continues 0UL; "b", Continues 0UL; "c", Continues 0UL], 0UL)
@@ -133,8 +133,8 @@ let ``Method iteration cancels the execution of the immediate downstream method 
 [<Test>]
 let ``Method iterations can be paused then resumed``() = 
     let g = graph {
-        let! a = node0 "a"
-        return! node1 "b" a
+        let! a = node1 "a" []
+        return! node1 "b" [a]
     }
 
                         state (g, ["a", Continues 1UL; "b", Started 4UL], 4UL)
@@ -161,8 +161,8 @@ let ``Method iterations can be paused then resumed``() =
 let ``Conducts through reproduction of a final transient artefact after reinstate``() = 
     // *Fo -> Fi
     let g = graph {
-        let! a = node0 "a"
-        return! node1 "b" a
+        let! a = node1 "a" []
+        return! node1 "b" [a]
     }
 
                         state (g, ["a", Final_MissingOutputOnly; "b", Final_MissingInputOnly], 0UL)
@@ -181,8 +181,8 @@ let ``Conducts through reproduction of a final transient artefact after reinstat
 let ``If a final transient method depends on another final transient method, its reproduction forces reproduction of the upstream method``() = 
     // Fo -> *Fio
     let g = graph {
-        let! a = node0 "a"
-        return! node1 "b" a
+        let! a = node1 "a" []
+        return! node1 "b" [a]
     }
 
                         state (g, ["a", Final_MissingOutputOnly; "b", Final_MissingInputOutput], 0UL)
@@ -206,9 +206,9 @@ let ``If a paused transient method depends on another paused transient method, i
     // which were computed for the already missing value.
     
     let g = graph { // Po -> *Pi -> F
-        let! a = node0 "a"
-        let! b = node1 "b" a
-        return! node1 "c" b
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [b]
     }
 
                         state (g, ["a", Paused_MissingOutputOnly; "b", Paused_MissingInputOnly; "c", Final], 0UL)
@@ -219,9 +219,9 @@ let ``If a paused transient method depends on another paused transient method, i
 [<Test>]
 let ``If a paused transient method depends on a final transient method, its execution forces reproduction of the upstream method``() = 
     let g = graph { // Fo -> *Pi -> F
-        let! a = node0 "a"
-        let! b = node1 "b" a
-        return! node1 "c" b
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [b]
     }
 
                         state (g, ["a", Final_MissingOutputOnly; "b", Paused_MissingInputOnly; "c", Final], 0UL)
@@ -234,9 +234,9 @@ let ``If a paused transient method depends on a final transient method, its exec
 [<Test>]
 let ``Paused transient method cannot be resumed but re-executes and invalidates downstream methods``() = 
     let g = graph { // P -> *Po -> F
-        let! a = node0 "a"
-        let! b = node1 "b" a
-        return! node1 "c" b
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [b]
     }
 
                         state (g, ["a", Paused; "b", Paused_MissingOutputOnly; "c", Final], 0UL)
@@ -248,10 +248,10 @@ let ``Paused transient method cannot be resumed but re-executes and invalidates 
 [<Test>]
 let ``If a final transient method depends on a paused transient method, it cannot be reproduced but re-executes and invalidates downstream methods``() = 
     let g = graph { // Po -> Fio -> *Fio -> Fi
-        let! a = node0 "a"
-        let! b = node1 "b" a
-        let! c = node1 "c" b
-        return! node1 "d" c
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        let! c = node1 "c" [b]
+        return! node1 "d" [c]
     }
 
                         state (g, ["a", Paused_MissingOutputOnly; "b", Final_MissingInputOutput; "c", Final_MissingInputOutput; "d", Final_MissingInputOnly], 0UL)

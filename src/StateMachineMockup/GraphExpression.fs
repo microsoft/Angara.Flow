@@ -21,13 +21,9 @@ type GraphBuilder() =
 
 let graph = GraphBuilder()
 
-let node0 name =
-    let node = { Name = name; Inputs = [] }
-    { Nodes = [node]; Target = Some node}
-
-let node1 name inNode =
-    let node = { Name = name; Inputs = [inNode] }
-    { Nodes = [node; inNode]; Target = Some node}
+let node1 name inNodes =
+    let node = { Name = name; Inputs = inNodes }
+    { Nodes = node :: inNodes; Target = Some node}
 
 type internal Vertex = StateMachineMockup.Vertex
 type internal Dag = Angara.Graph.DataFlowGraph<Vertex>
