@@ -28,11 +28,11 @@ let state (graphExpr:Graph, statuses:(string*VertexStatus) list, timeIndex : Tim
 let start (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Start (nameToVertex.[nodeName])), nameToVertex
 
-let iteration (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) =
-    state |> transition (Message.Iteration (nameToVertex.[nodeName])), nameToVertex
+let iteration (nodeName : string) (startTime : TimeIndex) (state : State, nameToVertex: Map<string, Vertex>) =
+    state |> transition (Message.Iteration (nameToVertex.[nodeName], startTime)), nameToVertex
     
-let succeeded (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) =
-    state |> transition (Message.Succeeded (nameToVertex.[nodeName])), nameToVertex
+let succeeded (nodeName : string) (startTime : TimeIndex) (state : State, nameToVertex: Map<string, Vertex>) =
+    state |> transition (Message.Succeeded (nameToVertex.[nodeName], startTime)), nameToVertex
 
 let stop (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Stop (nameToVertex.[nodeName])), nameToVertex

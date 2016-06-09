@@ -38,7 +38,7 @@ module VertexTransitions =
     | UpstreamStartOrReproduce
 
     let incorrectTransition transition currentStatus =
-        failwithf "Incorrect transition '%s' when vertex is in state '%A'" transition currentStatus
+        invalidOp (sprintf "Incorrect transition '%s' when vertex is in state '%A'" transition currentStatus)
 
 
     let start currentTime = function
@@ -52,21 +52,29 @@ module VertexTransitions =
         | VertexStatus.Final_MissingInputOutput -> VertexStatus.ReproduceRequested, UpstreamStartOrReproduce
         | _ as status -> incorrectTransition "start" status
 
-    let fail exn = function
+    let fail exn startTime = function
+        | VertexStatus.Started t 
+        | VertexStatus.Continues t 
+        | VertexStatus.Reproduces t when t = startTime -> VertexStatus.Incomplete (IncompleteReason.ExecutionFailed exn), NoAction
         | VertexStatus.Started _ 
-        | VertexStatus.Continues _
-        | VertexStatus.Reproduces _ -> VertexStatus.Incomplete (IncompleteReason.ExecutionFailed exn), NoAction
+        | VertexStatus.Continues _ 
+        | VertexStatus.Reproduces _ as status -> status, NoAction // obsolete message
         | _ as status -> incorrectTransition "fail" status
 
-    let iteration = function
-        | VertexStatus.Started t -> VertexStatus.Continues t, DownstreamStartOrIncomplete
-        | VertexStatus.Continues t -> VertexStatus.Continues t, DownstreamStartOrIncomplete // todo: filter only changed outputs
-        | VertexStatus.Reproduces t -> VertexStatus.Reproduces t, NoAction
+    let iteration startTime = function
+        | VertexStatus.Started t when t = startTime -> VertexStatus.Continues t, DownstreamStartOrIncomplete
+        | VertexStatus.Continues t when t = startTime -> VertexStatus.Continues t, DownstreamStartOrIncomplete // todo: filter only changed outputs
+        | VertexStatus.Reproduces t when t = startTime -> VertexStatus.Reproduces t, NoAction
+        | VertexStatus.Started _
+        | VertexStatus.Continues _ 
+        | VertexStatus.Reproduces _ as status -> status, NoAction // obsolete message
         | _ as status -> incorrectTransition "iteration" status
 
-    let succeeded = function
-        | VertexStatus.Continues _ -> VertexStatus.Final, NoAction
-        | VertexStatus.Reproduces t -> VertexStatus.Final, DownstreamStartOrReproduce
+    let succeeded startTime = function
+        | VertexStatus.Continues t when t = startTime -> VertexStatus.Final, NoAction
+        | VertexStatus.Reproduces t when t = startTime -> VertexStatus.Final, DownstreamStartOrReproduce
+        | VertexStatus.Continues _
+        | VertexStatus.Reproduces _ as status -> status, NoAction // obsolete message
         | _ as status -> incorrectTransition "succeeded" status
 
     let stop = function
@@ -227,12 +235,17 @@ module StateMachine =
             | _ -> makeStartOrIncomplete state w // try start            
             ) state
 
+    type Response<'a> =
+        | Success       of 'a
+        | Exception     of System.Exception
+    type ReplyChannel<'a> = Response<'a> -> unit
+
     type Message =
     | Start of Vertex
-    | Iteration of Vertex
-    | Succeeded of Vertex
+    | Iteration of Vertex * startTime:TimeIndex
+    | Succeeded of Vertex * startTime:TimeIndex
     | Stop of Vertex
-    | Failed of Vertex * exn 
+    | Failed of Vertex * exn * startTime:TimeIndex 
     | Alter
     
     open VertexTransitions
@@ -245,11 +258,11 @@ module StateMachine =
         let v, (vs, action) =
             match m with
             | Start v -> v, status v |> start state.TimeIndex
-            | Failed (v, exn) -> v, status v |> fail exn
-            | Iteration v -> v, status v |> iteration 
-            | Succeeded v -> v, status v |> succeeded 
+            | Failed (v, exn, startTime) -> v, status v |> fail exn startTime
+            | Iteration (v, startTime) -> v, status v |> iteration startTime
+            | Succeeded (v, startTime) -> v, status v |> succeeded startTime
             | Stop v -> v, status v |> stop
-            | _ as t -> failwithf "transition %A not implemented" t
+            | Alter -> failwithf "transition Alter not implemented"
         let state2 = update state v vs
 
         // Entry actions:
