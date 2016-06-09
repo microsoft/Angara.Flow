@@ -258,3 +258,64 @@ let ``If a final transient method depends on a paused transient method, it canno
     |> start "c"
     |>           check (state (g, ["a", Started 1UL; "b", Incomplete OutdatedInputs; "c", Incomplete OutdatedInputs; "d", Incomplete OutdatedInputs], 1UL))
     |> ignore
+
+[<Test>]
+let ``All methods are re-executed if a final transient method depends on two interdepending transient methods and one of them is paused``() = 
+    // We check here the case when processing first input implicitly updates the state of the second which then is processed in its turn, but is already outdated.
+    // Po -------------> *Fio
+    //    ---> Fio ---->
+    let g = graph { 
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [a;b]
+    }
+
+                        state (g, ["a", Paused_MissingOutputOnly; "b", Final_MissingInputOutput; "c", Final_MissingInputOutput], 0UL)
+    |> start "c"
+    |>           check (state (g, ["a", Started 1UL; "b", Incomplete OutdatedInputs; "c", Incomplete OutdatedInputs], 1UL))
+    |> ignore
+
+    let g = graph { 
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [b;a]
+    }
+
+                        state (g, ["a", Paused_MissingOutputOnly; "b", Final_MissingInputOutput; "c", Final_MissingInputOutput], 0UL)
+    |> start "c"
+    |>           check (state (g, ["a", Started 1UL; "b", Incomplete OutdatedInputs; "c", Incomplete OutdatedInputs], 1UL))
+    |> ignore
+
+[<Test>]
+let ``All methods are reproduced if a final transient method depends on two interdepending transient final methods``() = 
+    // Fo -------------> *Fio
+    //    ---> Fio ---->
+    let g = graph { 
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [a;b]
+    }
+
+                        state (g, ["a", Final_MissingOutputOnly; "b", Final_MissingInputOutput; "c", Final_MissingInputOutput], 0UL)
+    |> start "c"
+    |>           check (state (g, ["a", Reproduces 1UL; "b", ReproduceRequested; "c", ReproduceRequested], 1UL))
+    |> iteration "a" 1UL
+    |>           check (state (g, ["a", Reproduces 1UL; "b", ReproduceRequested; "c", ReproduceRequested], 2UL))
+    |> succeeded "a" 1UL
+    |>           check (state (g, ["a", Final; "b", Reproduces 3UL; "c", ReproduceRequested], 3UL))
+    |> iteration "b" 3UL
+    |>           check (state (g, ["a", Final; "b", Reproduces 3UL; "c", ReproduceRequested], 4UL))
+    |> succeeded "b" 3UL
+    |>           check (state (g, ["a", Final; "b", Final; "c", Reproduces 5UL], 5UL))
+    |> ignore
+
+    let g = graph { 
+        let! a = node1 "a" []
+        let! b = node1 "b" [a]
+        return! node1 "c" [b;a]
+    }
+
+                        state (g, ["a", Final_MissingOutputOnly; "b", Final_MissingInputOutput; "c", Final_MissingInputOutput], 0UL)
+    |> start "c"
+    |>           check (state (g, ["a", Reproduces 1UL; "b", ReproduceRequested; "c", ReproduceRequested], 1UL))
+    |> ignore
