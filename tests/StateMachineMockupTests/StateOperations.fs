@@ -44,6 +44,9 @@ let mdStart (nodeName : string, i : VertexIndex) (state : State, nameToVertex: M
 let iteration (nodeName : string) (startTime : TimeIndex) (state : State, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Iteration (nameToVertex.[nodeName], [], [0], startTime)), nameToVertex
 
+let mdIteration (nodeName : string, i : VertexIndex) (startTime : TimeIndex) (state : State, nameToVertex: Map<string, Vertex>) =
+    state |> transition (Message.Iteration (nameToVertex.[nodeName], i, [0], startTime)), nameToVertex
+
 let iteration_array (nodeName : string) (startTime : TimeIndex) (shape : int list) (state : State, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Iteration (nameToVertex.[nodeName], [], shape, startTime)), nameToVertex
     
@@ -63,7 +66,7 @@ let check (stateExp : State, nameToVertexExp: Map<string, Vertex>) (stateAct : S
     Assert.AreEqual(exp.Length, act.Length, sprintf "Different length of states (%d)" stateExp.TimeIndex)
     Array.iter2(fun (v,e) (u,a) -> 
         Assert.AreEqual(v :> obj, u :> obj, sprintf "Different vertices of states (%d)" stateExp.TimeIndex)
-        let eq = MdMap.equal(fun i s t -> Assert.AreEqual(s :> obj, t, sprintf "Different states at index (%A) (%d)" i stateExp.TimeIndex); true) e a
+        let eq = MdMap.equal(fun i s t -> Assert.AreEqual(s :> obj, t, sprintf "Different %A states at index (%A) (%d)" v i stateExp.TimeIndex); true) e a
         Assert.IsTrue(eq, sprintf "Different shapes of %A states (%d)" v stateExp.TimeIndex)) exp act
 
     Assert.AreEqual(stateExp.TimeIndex, stateAct.TimeIndex, sprintf "Different time indices (%d)" stateExp.TimeIndex)

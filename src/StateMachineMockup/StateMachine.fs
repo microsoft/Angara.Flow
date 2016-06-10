@@ -371,7 +371,7 @@ module StateMachine =
     /// If the vertex also has missing input, the function is called recursively for the input.
     and makeStartOrReproduce (state : State) (vi : VertexItem) : State =
         let vs = vertexState state vi
-        let apply (status, effect) = applyTransition state vi (vs.NewStatus status) effect
+        let apply (status, effect) = applyTransition state vi { Status = status } effect
 
         // Since `v` is final or paused, all inputs are assigned and also are either final or paused.
         match vs.Status with

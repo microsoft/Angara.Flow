@@ -331,7 +331,7 @@ open Angara.Data
 let scalar = MdMap.scalar
 
 [<Test>]
-let ``A method with input of type T can be connected to a method producing T[] and it is multiplied for each of the input array elements``() =
+let ``Scatter: A method with input of type T can be connected to a method producing T[] and it is multiplied for each of the input array elements``() =
     let g = graph { 
         let! a = scatter_node1 "a" []
         return! node1 "b" [a]
@@ -352,3 +352,43 @@ let ``A method with input of type T can be connected to a method producing T[] a
     |> succeeded "a" 1UL
     |>           check (mdState (g, ["a", scalar (Final [1]); "b", vector [CanStart 5UL]], 6UL))
     |> ignore
+
+[<Test>]
+let ``Reduce: If a method producing T is multiplied and produces T[], it can be connected to another method accepting T[]``() =
+    let g = graph { 
+        let! a = scatter_node1 "a" []
+        let! b = node1 "b" [a]
+        return! reduce_node1 "c" b
+    }
+
+                        mdState (g, ["a", scalar (Final [2]); "b", vector [Started 0UL; Started 1UL]; "c", scalar (Incomplete OutdatedInputs)], 1UL)
+    |> mdIteration ("b",[0]) 0UL
+    |>           check (mdState (g, ["a", scalar (Final [2]); "b", vector [Continues (0UL, [0]); Started 1UL]; "c", scalar (Incomplete OutdatedInputs)], 2UL))
+    |> mdIteration ("b",[1]) 1UL
+    |>           check (mdState (g, ["a", scalar (Final [2]); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (CanStart 3UL)], 3UL))
+    |> start "c" 
+    |>           check (mdState (g, ["a", scalar (Final [2]); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (Started 4UL)], 4UL))
+    |> mdIteration ("b",[1]) 1UL
+    |>           check (mdState (g, ["a", scalar (Final [2]); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (CanStart 5UL)], 5UL))
+    |> ignore
+
+[<Test>]
+let ``Reduce: if the scattering method produces an empty array, the reducing method should be executed for an empty input array as well``() =
+    let g = graph { 
+        let! a = scatter_node1 "a" []
+        let! b = node1 "b" [a]
+        return! reduce_node1 "c" b
+    }
+
+                        mdState (g, ["a", scalar (Continues (0UL,[2])); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (Continues (5UL, [0]))], 5UL)
+    |> iteration_array "a" 0UL [0]
+    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); "b", vector []; "c", scalar (CanStart 6UL)], 6UL))
+    |> ignore
+
+
+
+// Zero-length array
+// Transient vectors
+// Empty reduce when upstream
+// Reproduce succeed R -> Inc must update shape of Inc
+// u[1]→v,w[2]→v, in this case v is one-dimensional and has to items, since w produces two items; but because u produced only one item, second item of v is "incomplete" unless u re-executes and produces at least two items
