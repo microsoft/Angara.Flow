@@ -6,6 +6,12 @@ type MdMap<'k, 'v when 'k : comparison> =
     member AsScalar: unit -> 'v    
     static member Empty : MdMap<'k,'v>
 
+[<RequireQualifiedAccess>]
+[<NoEquality; NoComparison>]
+type MdMapTree<'key, 'value when 'key : comparison> = 
+    | Value of 'value
+    | Map of Map<'key, MdMapTree<'key, 'value>>
+
 [<RequireQualifiedAccessAttribute>]
 module MdMap =
     val empty<'k, 'v when 'k : comparison> : MdMap<'k,'v>
@@ -50,4 +56,6 @@ module MdMap =
     val find : mdkey:'k list -> mdmap:MdMap<'k,'v> -> 'v
     val tryFind : mdkey:'k list -> mdmap:MdMap<'k,'v> -> 'v option
     /// Returns a new md-map having the given scalar value for the given md-key.
-    val add: 'k list -> 'v -> MdMap<'k,'v> -> MdMap<'k,'v>
+    val add : 'k list -> 'v -> MdMap<'k,'v> -> MdMap<'k,'v>
+    val equal : ('key list -> 'value -> 'value -> bool) -> MdMap<'key,'value> -> MdMap<'key,'value> -> bool
+    val toTree : MdMap<'k,'v> -> MdMapTree<'k,'v>

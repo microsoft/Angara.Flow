@@ -2,7 +2,8 @@
 
 type Node =
     { Name : string
-      Inputs : Node list }
+      Inputs : Node list
+      OutputRank : int }
 
 type Graph =
     { Nodes : Node list 
@@ -22,15 +23,23 @@ type GraphBuilder() =
 let graph = GraphBuilder()
 
 let node1 name inNodes =
-    let node = { Name = name; Inputs = inNodes }
+    let node = { Name = name; Inputs = inNodes; OutputRank = 0 }
+    { Nodes = node :: inNodes; Target = Some node}
+
+let scatter_node1 name inNodes =
+    let node = { Name = name; Inputs = inNodes; OutputRank = 1 }
     { Nodes = node :: inNodes; Target = Some node}
 
 type internal Vertex = StateMachineMockup.Vertex
 type internal Dag = Angara.Graph.DataFlowGraph<Vertex>
 
+let rec internal buildType rank =
+    if rank = 0 then typeof<int>
+    else System.Array.CreateInstance(buildType (rank-1), 0).GetType()
+
 let buildDag (expr: Graph) =
     let dag, nodeToVertex = expr.Nodes |> Seq.fold(fun (dag:Dag, nodeToVertex:Map<string, Vertex>) node -> 
-        let v = Vertex(node.Name, node.Inputs |> List.map(fun _ -> typeof<int>), [typeof<int>])
+        let v = Vertex(node.Name, node.Inputs |> List.map(fun _ -> typeof<int>), [buildType node.OutputRank])
         dag.Add v, nodeToVertex.Add(node.Name, v)) (Dag(), Map.empty<string, Vertex>)
 
     let dag = expr.Nodes |> Seq.fold(fun (dag:Dag) node -> 

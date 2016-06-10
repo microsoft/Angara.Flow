@@ -2,7 +2,7 @@
 
 [<RequireQualifiedAccess>]
 [<NoEquality; NoComparison>]
-type internal MdMapTree<'key, 'value when 'key : comparison> = 
+type MdMapTree<'key, 'value when 'key : comparison> = 
     | Value of 'value
     | Map of Map<'key, MdMapTree<'key, 'value>>
     override x.ToString() =
@@ -104,6 +104,18 @@ module internal MdMapTree =
                 | MdMapTree.Map values -> MdMapTree.Map(values |> Map.map (fun k -> f (h-1) (k :: rkey)))
         f rank [] map
 
+    let equal (equal: 'key list -> 'value -> 'value -> bool) (map1:MdMapTree<'key,'value>) (map2:MdMapTree<'key,'value>) : bool =
+        let rec g rkey u v =
+            match u,v with
+            | MdMapTree.Value a, MdMapTree.Value b -> equal (rkey |> List.rev) a b
+            | MdMapTree.Map subA, MdMapTree.Map subB -> 
+                let a = subA |> Map.toArray
+                let b = subB |> Map.toArray
+                if a.Length = b.Length then Array.forall2(fun (i,u) (j,v) -> i = j && (g (i :: rkey) u v)) a b
+                else false
+            | _ -> false
+        g [] map1 map2
+
     let merge (f:'key list * 'value option * 'value option -> 'value) (map1:MdMapTree<'key,'value>) (map2:MdMapTree<'key,'value>) : MdMapTree<'key,'value> =
         let rec g rkey u v =
             match u,v with
@@ -194,3 +206,9 @@ module MdMap =
     let toJaggedArray (map:MdMap<int,'value>) : 't =
         let array = MdMapTree.toJaggedArray map.Tree
         box(array) :?> 't
+
+    let equal (equal: 'key list -> 'value -> 'value -> bool) (mapA:MdMap<'key,'value>) (mapB:MdMap<'key,'value>) =
+        MdMapTree.equal equal mapA.Tree mapB.Tree
+
+    let toTree (map:MdMap<'key,'value>) =
+        map.Tree
