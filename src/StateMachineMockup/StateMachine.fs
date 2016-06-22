@@ -96,6 +96,20 @@ module StateMachine =
           FlowState : Map<Vertex, MdMap<int,VertexState>> 
           TimeIndex : TimeIndex } 
 
+    type VertexChanges = 
+    | New of MdMap<int,VertexState>
+    | Removed
+    | Modified of indices:Set<VertexIndex> * old:MdMap<int,VertexState> * current: MdMap<int,VertexState> * isConnectionChanged:bool
+    | ShapeChanged of old:MdMap<int,VertexState> * current: MdMap<int,VertexState> * isConnectionChanged:bool
+
+    type Changes = Map<Vertex, VertexChanges>
+    let noChanges : Changes = Map.empty
+
+    type StateUpdate = 
+        { State : State
+          Changes : Changes }
+     
+
     type VertexItem = Vertex * VertexIndex
 
     let vertexState (state : State) (v : Vertex, i : VertexIndex) =
@@ -116,14 +130,31 @@ module StateMachine =
             return vs.Status
         }
 
-
-    let update (state : State) (v : Vertex, i : VertexIndex) (vsi : VertexState) =
-        let vs = state.FlowState |> Map.find v
+    let update (update : StateUpdate) (v : Vertex, i : VertexIndex) (vsi : VertexState) =
+        let vs = update.State.FlowState |> Map.find v
         let nvs = vs |> MdMap.add i vsi
-        { state with FlowState = state.FlowState |> Map.add v nvs }
+        let c = 
+            match update.Changes |> Map.tryFind v with
+            | Some(New _) -> New(nvs)
+            | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,nvs,connChanged)
+            | Some(Modified(indices,oldvs,_,connChanged)) -> Modified(indices |> Set.add i, oldvs, nvs, connChanged)
+            | Some(Removed) -> failwith "Removed vertex cannot be modified"
+            | None -> Modified(Set.empty |> Set.add i, vs, nvs, false) 
 
-    let replace (state : State) (v : Vertex) (vs : MdMap<int,VertexState>) =
-        { state with FlowState = state.FlowState |> Map.add v vs }
+        { State = { update.State with FlowState = update.State.FlowState |> Map.add v nvs }
+          Changes = update.Changes.Add(v, c) }
+
+    let replace (update : StateUpdate) (v : Vertex) (vs : MdMap<int,VertexState>) =
+        let c = 
+            match update.Changes |> Map.tryFind v with
+            | Some(New _) -> New(vs)
+            | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
+            | Some(Modified(_,oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
+            | Some(Removed) -> failwith "Removed vertex cannot be modified"
+            | None -> ShapeChanged(update.State.FlowState.[v],vs,false)
+
+        { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
+          Changes = update.Changes.Add(v, c) }
     
     
     /// Returns a sequence of vertex items that are immediate downstream vertex items which are represented in the flow state.
@@ -194,8 +225,8 @@ module StateMachine =
         enumerateUpstream state vi
         |> Seq.map(fun wj -> wj, Some(vertexStatus state wj |> getArtefactStatus)) 
 
-    let rec makeIncomplete (state : State) (v : Vertex, i : VertexIndex) reason : State =
-        match (v,i) |> tryVertexState state with
+    let rec makeIncomplete (state : StateUpdate) (v : Vertex, i : VertexIndex) reason : StateUpdate =
+        match (v,i) |> tryVertexState state.State with
         | None -> state 
         | Some vs ->
             match vs.Status with
@@ -219,8 +250,8 @@ module StateMachine =
                 let state2 = update state (v,i) { vs with Status = VertexStatus.Incomplete reason }
                 downstreamIncomplete state2 (v,i) IncompleteReason.OutdatedInputs    
 
-    and downstreamIncomplete (state : State) (v : Vertex, i : VertexIndex) reason : State =
-        enumerateDownstream state (v,i)
+    and downstreamIncomplete (state : StateUpdate) (v : Vertex, i : VertexIndex) reason : StateUpdate =
+        enumerateDownstream state.State (v,i)
         |> Seq.fold (fun s wj -> makeIncomplete s wj reason) state
 
     
@@ -231,18 +262,18 @@ module StateMachine =
         seq{ 0 .. (n-1) } |> Seq.forall(fun inRef -> (is1dArray v.Inputs.[inRef]) || inedges |> List.exists(fun e -> e.InputRef = inRef))
 
     /// When 'vi' succeeds and thus we have its output artefacts, this method updates downstream vertices so their state dimensionality corresponds to the given output.
-    let downstreamShape (state : State) (vi : VertexItem) : State =
+    let downstreamShape (state : StateUpdate) (vi : VertexItem) : StateUpdate =
         let outdatedItems n item = Seq.init n id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] (item j)) MdMap.empty
 
-        let dag = state.Graph.Structure
+        let dag = state.State.Graph.Structure
         let v,i = vi
         let w = dag.OutEdges v |> Seq.choose(fun e -> match e.Type with Scatter _ -> Some e.Target | _ -> None) 
         let r = vertexRank v dag
         let scope = Graph.toSeqSubgraph (fun u _ _ -> (vertexRank u dag) <= r) dag w |> Graph.topoSort dag
-        scope |> Seq.fold(fun (state : State) w ->
-            match w |> allInputsAssigned state with
+        scope |> Seq.fold(fun (state : StateUpdate) w ->
+            match w |> allInputsAssigned state.State with
             | false -> // some inputs are unassigned
-                match (w,[]) |> tryVertexState state with
+                match (w,[]) |> tryVertexState state.State with
                 | Some wis when wis.Status.IsIncompleteReason IncompleteReason.UnassignedInputs -> state
                 | Some wis -> replace state w (MdMap.scalar { wis with Status = Incomplete UnassignedInputs })
                 | None -> replace state w (MdMap.scalar VertexState.Unassigned)
@@ -254,18 +285,18 @@ module StateMachine =
                         match edgeType with
                         | Scatter _ -> 
                             opt {
-                                let! us = state.FlowState |> Map.tryFind u
+                                let! us = state.State.FlowState |> Map.tryFind u
                                 let! uis = us |> MdMap.tryFind i
                                 let! shape = uis.Status.TryGetShape()
                                 return shape.[outRef]
                             }
                         | _ -> None // doesn't depend on the target dimension
                     else // urank > r; u is vectorized for the dimension
-                        match state.FlowState.[u] |> MdMap.tryGet i with
+                        match state.State.FlowState.[u] |> MdMap.tryGet i with
                         | Some selection when not selection.IsScalar -> Some(selection |> MdMap.toShallowSeq |> Seq.length)
                         | _ -> None
                 
-                let ws = state.FlowState.[w]
+                let ws = state.State.FlowState.[w]
                 match ws |> MdMap.tryGet i with
                     | Some _ ->
                         let dimLen = 
@@ -287,13 +318,13 @@ module StateMachine =
             ) state
        
 
-    let rec makeStartOrIncomplete (state : State) (vi : VertexItem) : State =
-        let makeCanStart state vi =
-            let vs = vertexState state vi
+    let rec makeStartOrIncomplete (state : StateUpdate) (vi : VertexItem) : StateUpdate =
+        let makeCanStart (state:StateUpdate) vi =
+            let vs = vertexState state.State vi
             match vs.Status with
             | VertexStatus.CanStart _ -> state
             | _ ->
-                let state2 = update state vi { vs with Status = VertexStatus.CanStart state.TimeIndex }
+                let state2 = update state vi { vs with Status = VertexStatus.CanStart state.State.TimeIndex }
                 downstreamIncomplete state2 vi IncompleteReason.OutdatedInputs
 
         let startTransient = makeStartOrReproduce 
@@ -301,8 +332,8 @@ module StateMachine =
         let v,i = vi
         match v.Inputs with 
         | [] -> makeCanStart state vi
-        | _ when allInputsAssigned state v -> 
-            let statuses = getUpstreamArtefactStatus state vi
+        | _ when allInputsAssigned state.State v -> 
+            let statuses = getUpstreamArtefactStatus state.State vi
             let transients, outdated, unassigned = 
                 statuses |> Seq.fold(fun (transients, outdated, unassigned) (w, status) ->
                     match status with
@@ -327,21 +358,21 @@ module StateMachine =
         | _ -> // has unassigned inputs
             makeIncomplete state vi IncompleteReason.UnassignedInputs
 
-    and downstreamStartOrIncomplete (state : State) (vi : VertexItem) : State = 
-        enumerateDownstream state vi
+    and downstreamStartOrIncomplete (state : StateUpdate) (vi : VertexItem) = 
+        enumerateDownstream state.State vi
         |> Seq.fold (fun s wj -> makeStartOrIncomplete s wj) state
 
 
-    and downstreamStartOrReproduce (state : State) (vi : VertexItem) : State =
+    and downstreamStartOrReproduce (state : StateUpdate) (vi : VertexItem) =
         let allInputs wj = 
-            getUpstreamArtefactStatus state wj
+            getUpstreamArtefactStatus state.State wj
             |> Seq.forall(fun (_, status) -> match status with Some Transient -> false | _ -> true)
 
-        enumerateDownstream state vi
+        enumerateDownstream state.State vi
         |> Seq.fold (fun s wj -> 
-            let ws = vertexState state wj
+            let ws = vertexState state.State wj
             match ws.Status with
-            | VertexStatus.ReproduceRequested shape -> update state wj { ws with Status = VertexStatus.Reproduces (state.TimeIndex, shape) }
+            | VertexStatus.ReproduceRequested shape -> update state wj { ws with Status = VertexStatus.Reproduces (state.State.TimeIndex, shape) }
             | VertexStatus.Final_MissingInputOnly shape when allInputs wj -> update state wj { ws with Status = VertexStatus.Final shape }
             | VertexStatus.Final_MissingInputOutput shape when allInputs wj -> update state wj { ws with Status = VertexStatus.Final_MissingOutputOnly shape } 
             
@@ -363,21 +394,21 @@ module StateMachine =
     /// Input: `v` is either Final_* or Paused_*
     /// If the vertex has missing output, it is either going to Reproduces, or Started (with downstream invalidated).
     /// If the vertex also has missing input, the function is called recursively for the input.
-    and upstreamStartOrReproduce (state : State) (vi : VertexItem) : State =
-        enumerateUpstream state vi |> Seq.fold(fun s wj -> makeStartOrReproduce s wj) state
+    and upstreamStartOrReproduce (state : StateUpdate) (vi : VertexItem) =
+        enumerateUpstream state.State vi |> Seq.fold(fun s wj -> makeStartOrReproduce s wj) state
 
     /// Input: `v` is either Final_* or Paused_*
     /// If the vertex has missing output, it is either going to Reproduces, or Started (with downstream invalidated).
     /// If the vertex also has missing input, the function is called recursively for the input.
-    and makeStartOrReproduce (state : State) (vi : VertexItem) : State =
-        let vs = vertexState state vi
+    and makeStartOrReproduce (state : StateUpdate) (vi : VertexItem) =
+        let vs = vertexState state.State vi
         let apply (status, effect) = applyTransition state vi { Status = status } effect
 
         // Since `v` is final or paused, all inputs are assigned and also are either final or paused.
         match vs.Status with
         // These statuses have all inputs and can be started
-        | VertexStatus.Final_MissingOutputOnly shape -> (VertexStatus.Reproduces (state.TimeIndex,shape), NoAction) |> apply
-        | VertexStatus.Paused_MissingOutputOnly _ -> (VertexStatus.Started state.TimeIndex, DownstreamIncomplete IncompleteReason.OutdatedInputs) |> apply
+        | VertexStatus.Final_MissingOutputOnly shape -> (VertexStatus.Reproduces (state.State.TimeIndex,shape), NoAction) |> apply
+        | VertexStatus.Paused_MissingOutputOnly _ -> (VertexStatus.Started state.State.TimeIndex, DownstreamIncomplete IncompleteReason.OutdatedInputs) |> apply
 
         // These statuses has missing inputs and require recursive reproduction
         | VertexStatus.Final_MissingInputOutput shape -> (VertexStatus.ReproduceRequested shape, UpstreamStartOrReproduce) |> apply
@@ -398,7 +429,7 @@ module StateMachine =
         | VertexStatus.CanStart _
         | VertexStatus.Started _ -> state // nothing to do, 
 
-    and applyTransition (state : State) (vi : VertexItem) (targetState : VertexState) (effect : TransitionEffect) =
+    and applyTransition (state : StateUpdate) (vi : VertexItem) (targetState : VertexState) (effect : TransitionEffect) =
         let state2 = update state vi targetState
 
         // State entry action:
@@ -436,7 +467,7 @@ module StateMachine =
     
     open VertexTransitions
 
-    let transition (m : Message) (state : State) : State =
+    let transition (m : Message) (state : State) : StateUpdate =
         let state = { state with TimeIndex = state.TimeIndex  + 1UL }
         
         let status = vertexStatus state 
@@ -451,6 +482,6 @@ module StateMachine =
             | Stop (v,i) -> (v,i), status (v,i) |> stop |> ofStatus
             | Alter -> failwithf "transition Alter not implemented"
         
-        let state2 = applyTransition state vi vs transitionEffect
+        let state2 = applyTransition { State = state; Changes = noChanges } vi vs transitionEffect
         
         state2

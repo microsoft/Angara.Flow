@@ -30,10 +30,12 @@ let mdState (graphExpr:Graph, statuses:(string* MdMap<int,VertexStatus>) list, t
             map.Add(nameToVertex.[nodeName], status2)) Map.empty
     { Graph = flowGraph; FlowState = flowState; TimeIndex = timeIndex }, nameToVertex
 
+
 let state (graphExpr:Graph, statuses:(string*VertexStatus) list, timeIndex : TimeIndex) =
     let mstatuses = statuses |> List.map(fun (n,s) -> n, MdMap.scalar s)
     mdState (graphExpr, mstatuses, timeIndex)
 
+let takeState (stateUpdate : StateUpdate) = stateUpdate.State 
 
 let start (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Start (nameToVertex.[nodeName], [])), nameToVertex
@@ -57,7 +59,8 @@ let stop (nodeName : string) (state : State, nameToVertex: Map<string, Vertex>) 
     state |> transition (Message.Stop (nameToVertex.[nodeName], [])), nameToVertex
 
 
-let check (stateExp : State, nameToVertexExp: Map<string, Vertex>) (stateAct : State, nameToVertexAct: Map<string, Vertex>) =
+let check (stateExp : State, nameToVertexExp: Map<string, Vertex>) (stateAct : StateUpdate, nameToVertexAct: Map<string, Vertex>) =
+    let stateAct = stateAct.State
     Assert.AreEqual(nameToVertexExp, nameToVertexAct, sprintf "Different names (%d)" stateExp.TimeIndex)
     Assert.AreEqual(stateExp.Graph, stateAct.Graph, sprintf "Different graphs (%d)" stateExp.TimeIndex)
     
