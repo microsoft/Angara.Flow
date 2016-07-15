@@ -34,6 +34,7 @@ let ``Obsolete 'succeeded' message is ignored``() =
         return! node1 "a" []
     }
 
+    // todo: add first start and then restart, so that it would be clear where the obsolete message from
                         state (g, ["a", CanStart 0UL], 0UL)
     |> start "a"
     |>           check (state (g, ["a", Started 1UL], 1UL))
@@ -111,6 +112,7 @@ let ``Next method iteration cancels the possible execution of its downstream met
     |>           check (state (g, ["a", Continues (1UL,[0]); "b", Started 4UL], 4UL))    
     |> iteration "a" 1UL // <-- cancels the execution of "b"; possible obsolete "iteration" from "b" will be ignored.
     |>           check (state (g, ["a", Continues (1UL,[0]); "b", CanStart 5UL], 5UL))
+    // todo: iteration "b" 4UL is ignored
     |> succeeded "a" 1UL
     |>           check (state (g, ["a", Final [0]; "b" ,CanStart 5UL], 6UL))
     |> ignore
@@ -123,6 +125,8 @@ let ``Method iteration cancels the execution of the immediate downstream method 
         let! b = node1 "b" [a]
         return! node1 "c" [b]
     }
+
+    // todo: full scenario from incomplete state
 
                         state (g, ["a", Continues (0UL,[0]); "b", Continues (0UL,[0]); "c", Continues (0UL,[0])], 0UL)
     |> iteration "a" 0UL
@@ -137,6 +141,7 @@ let ``Method iterations can be paused then resumed``() =
         return! node1 "b" [a]
     }
 
+    // todo: full scenario
                         state (g, ["a", Continues (1UL,[0]); "b", Started 4UL], 4UL)
     |> stop "a"                                            
     |>           check (state (g, ["a", Paused [0]; "b", Started 4UL], 5UL))
@@ -170,7 +175,7 @@ let ``Conducts through reproduction of a final transient artefact after reinstat
     |>           check (state (g, ["a", Reproduces (1UL,[0]); "b", Final_MissingInputOnly [0];], 1UL))
     |> iteration "a" 1UL
     |>           check (state (g, ["a", Reproduces (1UL,[0]); "b", Final_MissingInputOnly [0];], 2UL))
-    |> succeeded "a" 0UL // <-- obsolete message
+    |> succeeded "a" 0UL // <-- obsolete message (todo: to unit test)
     |>           check (state (g, ["a", Reproduces (1UL,[0]); "b", Final_MissingInputOnly [0];], 3UL))
     |> succeeded "a" 1UL
     |>           check (state (g, ["a", Final [0]; "b", Final [0]], 4UL))
@@ -338,9 +343,9 @@ let ``Scatter: A method with input of type T can be connected to a method produc
     }
 
 
-                        mdState (g, ["a", scalar (CanStart 0UL); "b", scalar (Incomplete OutdatedInputs)], 0UL)
+                        mdState (g, ["a", scalar (CanStart 0UL); "b", vector []], 0UL)
     |> start "a"
-    |>           check (mdState (g, ["a", scalar (Started 1UL); "b", scalar (Incomplete OutdatedInputs)], 1UL))
+    |>           check (mdState (g, ["a", scalar (Started 1UL); "b", vector []], 1UL))
     |> iteration_array "a" 1UL [2]
     |>           check (mdState (g, ["a", scalar (Continues (1UL,[2])); "b", vector [CanStart 2UL; CanStart 2UL]], 2UL))
     |> mdStart ("b",[0])
@@ -372,19 +377,18 @@ let ``Reduce: If a method producing T is multiplied and produces T[], it can be 
     |>           check (mdState (g, ["a", scalar (Final [2]); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (CanStart 5UL)], 5UL))
     |> ignore
 
-[<Test>]
-let ``Reduce: if the scattering method produces an empty array, the reducing method should be executed for an empty input array as well``() =
-    Assert.Inconclusive("Reduce of empty input is not implemented")
-    let g = graph { 
-        let! a = scatter_node1 "a" []
-        let! b = node1 "b" [a]
-        return! reduce_node1 "c" b
-    }
-
-                        mdState (g, ["a", scalar (Continues (0UL,[2])); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (Continues (5UL, [0]))], 5UL)
-    |> iteration_array "a" 0UL [0]
-    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); "b", vector []; "c", scalar (CanStart 6UL)], 6UL))
-    |> ignore
+//[<Test>]
+//let ``Reduce: if the scattering method produces an empty array, the reducing method should be executed for an empty input array as well``() =
+//    let g = graph { 
+//        let! a = scatter_node1 "a" []
+//        let! b = node1 "b" [a]
+//        return! reduce_node1 "c" b
+//    }
+//
+//                        mdState (g, ["a", scalar (Continues (0UL,[2])); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (Continues (5UL, [0]))], 5UL)
+//    |> iteration_array "a" 0UL [0]
+//    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); "b", emptyVector Uptodate; "c", scalar (CanStart 6UL)], 6UL))
+//    |> ignore
 
 
 

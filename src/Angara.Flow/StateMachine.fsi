@@ -27,13 +27,24 @@ module StateMachine =
         /// This may happen when loading the method state from a storage or when the upstream vertex is executed on a remote node.
         | TransientInputs
 
+    /// Each of the elements of this array corresponds to the method output with same index
+    /// and if the output item is a 1d-array, it keeps number of elements in that array; 
+    /// otherwise, it is zero.
+    type OutputShape = int list
+
     /// Indicates how the state machine considers a vertex item.
     type VertexStatus =
         /// The vertex execution has successfully completed all iterations.
-        | Final                        
+        | Final of OutputShape       
+        | Final_MissingInputOnly of OutputShape    
+        | Final_MissingOutputOnly of OutputShape
+        | Final_MissingInputOutput of OutputShape                         
         /// The input methods are "final", "paused" or "continues"; 
         /// and the method isn't being executed but previously produced the output at least one time.
-        | Paused 
+        | Paused of OutputShape 
+        | Paused_MissingOutputOnly of OutputShape
+        | Paused_MissingInputOnly of OutputShape
+        | Paused_MissingInputOutput of OutputShape
         /// Can be executed.
         /// `time` keeps time index when the vertex entered this status.
         | CanStart                  of time: TimeIndex 
@@ -47,40 +58,31 @@ module StateMachine =
         /// but the output is missing in the dataflow state,
         /// so the vertex is being executed again to reproduce the execution output.
         /// The `startTime` contains the state machine time index when the vertex entered this status.
-        | Reproduces                of startTime: TimeIndex
+        | Reproduces                of startTime: TimeIndex * outputShape : OutputShape
         /// The vertex execution has successfully completed but the output is missing in the dataflow state,
         /// so the vertex is required to be executed again, but it cannot while there is an input vertex
         /// which also has no state and must be executed.
-        | ReproduceRequested   
+        | ReproduceRequested of OutputShape   
         /// The vertex cannot be executed and was not successfully completed previously.
         | Incomplete                of reason: IncompleteReason
    
         member IsUpToDate : bool
         member IsIncompleteReason : IncompleteReason -> bool
+        member TryGetShape : unit -> OutputShape option
 
     /// Keeps status and data of a vertex as part of the StateMachine state.
-    type VertexState<'d>  = {
+    [<AbstractClass>]
+    type VertexState = 
         /// Keeps status of the vertex in terms of the state machine.
-        Status : VertexStatus
-        /// Keeps data associated with the vertex.
-        /// Data can be presented or missing for any status.
-        /// If status is `Complete`, data still can be missing or partial. For example,
-        /// the state is deserialized and data is transient.
-        /// Also, if status is `Incomplete`, data can be presented but obsolete.
-        Data : 'd option
-    } with
-        /// Returns a `VertexState` instance indicating a vertex that has at least one input unassigned.
-        static member Unassigned : VertexState<'d>
-        /// Creates a `VertexState` instance indicating a vertex awaiting upward computation to produce one or more arguments,
-        /// before it could be able to start.
-        static member Outdated : VertexState<'d>
-        /// Creates a `VertexState` instance indicating a vertex that successfully completed its evaluation.
-        static member Complete : 'd -> VertexState<'d>
+        member Status : VertexStatus
+        /// Returns a clone of the vertex state which has the given status.
+        member WithStatus : VertexStatus -> VertexState
+    // How to create new? - real VertexState type is generic type parameter which has a constructor
 
     /// An immutable type which keeps state for the StateMachine.
-    type State<'v,'d when 'v:comparison and 'v:>IVertex> =
+    type State<'v when 'v:comparison and 'v:>IVertex> =
         { Graph : DataFlowGraph<'v>
-          FlowState : DataFlowState<'v, VertexState<'d>> 
+          FlowState : DataFlowState<'v, VertexState> 
           TimeIndex : TimeIndex }    
 
     ////////////////////////
@@ -90,17 +92,17 @@ module StateMachine =
     ////////////////////////
 
     /// Describes changes that can occur with dataflow vertex.
-    type VertexChanges<'d> = 
+    type VertexChanges = 
         /// New vertex is added.
-        | New of MdVertexState<VertexState<'d>>
+        | New of MdVertexState<VertexState>
         /// Vertex is removed.
         | Removed 
         /// Shape of a vertex state probably is changed.
-        | ShapeChanged of old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
+        | ShapeChanged of old:MdVertexState<VertexState> * current:MdVertexState<VertexState> * isConnectionChanged:bool 
         /// Some items of a vertex state are changed.
-        | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
+        | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState> * current:MdVertexState<VertexState> * isConnectionChanged:bool 
     
-    type Changes<'v,'d when 'v : comparison> = Map<'v, VertexChanges<'d>>
+    type Changes<'v when 'v : comparison> = Map<'v, VertexChanges>
 
     ////////////////////////
     //
@@ -122,10 +124,10 @@ module StateMachine =
     /// A message for the state machine which describes a batch of operations
     /// to be performed by the state machine atomically in the certain order:
     /// disconnect vertices; remove vertices; merge graph; connect vertices.
-    type AlterMessage<'v,'d when 'v:comparison and 'v:>IVertex> =
+    type AlterMessage<'v when 'v:comparison and 'v:>IVertex> =
         { Disconnect:  (('v * InputRef) * ('v * OutputRef) option) list 
           Remove:      ('v * RemoveStrategy) list 
-          Merge:       DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>>
+          Merge:       DataFlowGraph<'v> * DataFlowState<'v,VertexState>
           Connect:     AlterConnection<'v> list }
 
     /// A message for the state machine which says that the vertex should be started,
