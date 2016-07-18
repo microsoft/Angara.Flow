@@ -62,6 +62,9 @@ val find : f:('v -> bool) -> startVertex:'v -> g:DirectedAcyclicGraph<'v,'e> -> 
     when 'v : comparison and 'e :> IEdge<'v> and 'e : equality
 /// Returns a sequence of vertices which starts with given vertex and finishes when isFinal returns true (final vertices are not included).
 val toSeqSubgraph : isFinal:('v -> Lazy<seq<'e>> -> Lazy<seq<'e>> -> bool) -> g:DirectedAcyclicGraph<'v,'e> -> sources:seq<'v> -> seq<'v>
+/// Returns a sequence of vertices which starts with given vertex and finishes when isFinal returns true,
+/// and final vertices separately.
+val toSeqSubgraphAndFinal : isFinal:('v -> Lazy<seq<'e>> -> Lazy<seq<'e>> -> bool) -> g:DirectedAcyclicGraph<'v,'e> -> sources:seq<'v> -> seq<'v> * seq<'v>
     when 'v : comparison and 'e :> IEdge<'v> and 'e : equality
 val topoSort : g:DirectedAcyclicGraph<'v,'e> -> selection:seq<'v> -> seq<'v> 
     when 'v : comparison and 'e :> IEdge<'v> and 'e : equality

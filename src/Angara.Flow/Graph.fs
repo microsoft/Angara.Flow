@@ -187,6 +187,30 @@ let find (f: 'v -> bool) (startVertex:'v) (g: DirectedAcyclicGraph<'v,'e>)  : 'v
             v |> g.OutEdges |> Seq.iter(fun e -> if not (visited.Contains(e.Target)) then queue.Enqueue(e.Target))
     !found
 
+/// Returns a sequence of vertices which starts with given vertex and finishes when isFinal returns true,
+/// and final vertices separately.
+/// isFinal: vertex -> lazy<input edges> -> lazy<output edges> -> is final
+/// Returns: the subgraph vertices and the final vertices
+let toSeqSubgraphAndFinal (isFinal: 'v -> Lazy<'e seq> -> Lazy<'e seq> -> bool) (g: DirectedAcyclicGraph<'v,'e>) (sources:'v seq) : 'v seq * 'v seq =
+    let visited = new HashSet<'v>()
+    let queue = new Queue<'v>()
+    let final = new HashSet<'v>()
+    sources |> Seq.iter(fun v -> queue.Enqueue(v))
+    let subvertices =
+        seq {
+            while(queue.Count > 0) do
+                let v = queue.Dequeue()
+                visited.Add(v) |> ignore
+                let inedges = lazy( g.InEdges v )
+                let outedges = lazy( g.OutEdges v )
+                if not (isFinal v inedges outedges) then
+                    yield v                
+                    outedges.Value |> Seq.iter(fun e -> if not (visited.Contains(e.Target)) then queue.Enqueue(e.Target))
+                else
+                    final.Add(v) |> ignore
+        }
+    subvertices, upcast final
+
 /// Returns a sequence of vertices which starts with given vertex and finishes when isFinal returns true (final vertices are not included).
 /// isFinal: vertex -> lazy<input edges> -> lazy<output edges> -> is final
 let toSeqSubgraph (isFinal: 'v -> Lazy<'e seq> -> Lazy<'e seq> -> bool) (g: DirectedAcyclicGraph<'v,'e>) (sources:'v seq) : 'v seq =

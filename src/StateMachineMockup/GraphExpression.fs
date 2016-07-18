@@ -31,7 +31,7 @@ let scatter_node1 name inNodes =
     { Nodes = node :: inNodes; Target = Some node}
 
 let reduce_node1 name inNode =
-    let node = { Name = name; Inputs = [inNode,1]; OutputRank = 1 }
+    let node = { Name = name; Inputs = [inNode,1]; OutputRank = 0 }
     { Nodes = [node; inNode]; Target = Some node}
 
 
@@ -43,13 +43,22 @@ let rec internal buildType rank =
     else System.Array.CreateInstance(buildType (rank-1), 0).GetType()
 
 let buildDag (expr: Graph) =
-    let dag, nodeToVertex = expr.Nodes |> Seq.fold(fun (dag:Dag, nodeToVertex:Map<string, Vertex>) node -> 
-        let v = Vertex(node.Name, node.Inputs |> List.map(fun (_,inputRank) -> buildType inputRank), [buildType node.OutputRank])
-        dag.Add v, nodeToVertex.Add(node.Name, v)) (Dag(), Map.empty<string, Vertex>)
+    let rec addMethod (dag : Dag) (node : Node) (nodeToVertex : Map<string,Vertex>) =
+        match nodeToVertex |> Map.containsKey node.Name with
+        | true -> dag, nodeToVertex
+        | false ->
+            let v = Vertex(node.Name, node.Inputs |> List.map(fun (_,inputRank) -> buildType inputRank), [buildType node.OutputRank])
+            let dag2 = dag.Add v 
+            let nodeToVertex2 = nodeToVertex.Add(node.Name, v)
+            node.Inputs 
+            |> Seq.mapi(fun i inp -> (i,inp))
+            |> Seq.fold(fun (dag, nodeToVertex) (inpRef, (input,_)) ->
+                let dag3, nodeToVertex3 = addMethod dag input nodeToVertex
+                (dag3.Connect (v, inpRef) (nodeToVertex3.[input.Name], 0)), nodeToVertex3) (dag2, nodeToVertex2)
 
-    let dag = expr.Nodes |> Seq.fold(fun (dag:Dag) node -> 
-        node.Inputs 
-        |> Seq.mapi(fun i inp -> i,inp) 
-        |> Seq.fold(fun dag (inpRef, (input: Node, _)) -> dag.Connect (nodeToVertex.[node.Name], inpRef) (nodeToVertex.[input.Name], 0)) dag) dag
-    
+    let dag, nodeToVertex = 
+        expr.Nodes 
+        |> List.rev
+        |> Seq.fold(fun (dag:Dag, nodeToVertex:Map<string, Vertex>) node -> addMethod dag node nodeToVertex) (Dag(), Map.empty<string, Vertex>)
+
     dag, nodeToVertex

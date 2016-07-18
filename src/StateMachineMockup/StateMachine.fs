@@ -32,6 +32,7 @@ module VertexTransitions =
 
     type TransitionEffect =
     | NoAction
+    /// Precondition: The vertex is up-to-date.
     | DownstreamStartOrIncomplete of shapeChanged: bool
     | DownstreamStartOrReproduce
     | DownstreamIncomplete of IncompleteReason
@@ -164,7 +165,7 @@ module StateMachine =
             let j = 
                 match e.Type with
                 | OneToOne _ | Scatter _ | Collect _ -> i // actual indices will be equal or longer
-                | Reduce _ -> List.removeLast i
+                | Reduce r -> List.ofMaxLength r i
             match state.FlowState.TryFind e.Target with // finds real presented indices
             | Some tvs -> tvs |> MdMap.startingWith j |> MdMap.toSeq |> Seq.map(fun (k,_) -> e.Target,k)
             | None -> Seq.empty)
@@ -222,8 +223,13 @@ module StateMachine =
 
 
     let getUpstreamArtefactStatus (state : State) (vi : VertexItem) : (VertexItem * ArtefactStatus option) seq =
+        let rec find (j : VertexIndex) (vs : MdMap<int,VertexState>) =
+            match vs |> MdMap.tryGet j with
+            | Some vsj -> vsj.AsScalar().Status |> getArtefactStatus |> Some
+            | None -> None
+
         enumerateUpstream state vi
-        |> Seq.map(fun wj -> wj, Some(vertexStatus state wj |> getArtefactStatus)) 
+        |> Seq.map(fun (w,j) -> (w,j), find j (state.FlowState |> Map.find w)) 
 
     let rec makeIncomplete (state : StateUpdate) (v : Vertex, i : VertexIndex) reason : StateUpdate =
         match (v,i) |> tryVertexState state.State with
@@ -262,6 +268,7 @@ module StateMachine =
         seq{ 0 .. (n-1) } |> Seq.forall(fun inRef -> (is1dArray v.Inputs.[inRef]) || inedges |> List.exists(fun e -> e.InputRef = inRef))
 
     /// When 'vi' succeeds and thus we have its output artefacts, this method updates downstream vertices so their state dimensionality corresponds to the given output.
+    /// Precondition: vi is up-to-date.
     let downstreamShape (state : StateUpdate) (vi : VertexItem) : StateUpdate =
         let outdatedItems n item = Seq.init n id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] (item j)) MdMap.empty
 
@@ -269,53 +276,60 @@ module StateMachine =
         let v,i = vi
         let w = dag.OutEdges v |> Seq.choose(fun e -> match e.Type with Scatter _ -> Some e.Target | _ -> None) 
         let r = vertexRank v dag
-        let scope = Graph.toSeqSubgraph (fun u _ _ -> (vertexRank u dag) <= r) dag w |> Graph.topoSort dag
-        scope |> Seq.fold(fun (state : StateUpdate) w ->
-            match w |> allInputsAssigned state.State with
-            | false -> // some inputs are unassigned
-                match (w,[]) |> tryVertexState state.State with
-                | Some wis when wis.Status.IsIncompleteReason IncompleteReason.UnassignedInputs -> state
-                | Some wis -> replace state w (MdMap.scalar { wis with Status = Incomplete UnassignedInputs })
-                | None -> replace state w (MdMap.scalar VertexState.Unassigned)
-            | true -> // all inputs are assigned
-                let getDimLength u (edgeType:ConnectionType) (outRef: OutputRef) : int option =
-                    let urank = vertexRank u dag
-                    if urank < r then None // doesn't depend on the target dimension
-                    else if urank = r then
-                        match edgeType with
-                        | Scatter _ -> 
-                            opt {
-                                let! us = state.State.FlowState |> Map.tryFind u
-                                let! uis = us |> MdMap.tryFind i
-                                let! shape = uis.Status.TryGetShape()
-                                return shape.[outRef]
-                            }
-                        | _ -> None // doesn't depend on the target dimension
-                    else // urank > r; u is vectorized for the dimension
-                        match state.State.FlowState.[u] |> MdMap.tryGet i with
-                        | Some selection when not selection.IsScalar -> Some(selection |> MdMap.toShallowSeq |> Seq.length)
-                        | _ -> None
+        let scope, final = Graph.toSeqSubgraphAndFinal (fun u _ _ -> (vertexRank u dag) <= r) dag w 
+        let scope = scope |> Graph.topoSort dag
+        let state2 =
+            scope |> Seq.fold(fun (state : StateUpdate) w ->
+                match w |> allInputsAssigned state.State with
+                | false -> // some inputs are unassigned
+                    match (w,[]) |> tryVertexState state.State with
+                    | Some wis when wis.Status.IsIncompleteReason IncompleteReason.UnassignedInputs -> state
+                    | Some wis -> replace state w (MdMap.scalar { wis with Status = Incomplete UnassignedInputs })
+                    | None -> replace state w (MdMap.scalar VertexState.Unassigned)
+                | true -> // all inputs are assigned
+                    let getDimLength u (edgeType:ConnectionType) (outRef: OutputRef) : int option =
+                        let urank = vertexRank u dag
+                        if urank < r then None // doesn't depend on the target dimension
+                        else if urank = r then
+                            match edgeType with
+                            | Scatter _ -> 
+                                opt {
+                                    let! us = state.State.FlowState |> Map.tryFind u
+                                    let! uis = us |> MdMap.tryFind i
+                                    let! shape = uis.Status.TryGetShape()
+                                    return shape.[outRef]
+                                }
+                            | _ -> None // doesn't depend on the target dimension
+                        else // urank > r; u is vectorized for the dimension
+                            match state.State.FlowState.[u] |> MdMap.tryGet i with
+                            | Some selection when not selection.IsScalar -> Some(selection |> MdMap.toShallowSeq |> Seq.length)
+                            | _ -> Some 0
                 
-                let ws = state.State.FlowState.[w]
-                match ws |> MdMap.tryGet i with
-                    | Some _ ->
-                        let dimLen = 
-                            w 
-                            |> dag.InEdges 
-                            |> Seq.map (fun (inedge:Edge<_>) -> getDimLength inedge.Source inedge.Type inedge.OutputRef) 
-                            |> Seq.fold(fun (dimLen:(int*int) option) (inDimLen:int option) ->
-                                match dimLen, inDimLen with
-                                | Some(minDim,maxDim), Some(inDimLen) -> Some(min minDim inDimLen, max maxDim inDimLen)
-                                | Some(dimLen), None -> Some(dimLen)
-                                | None, Some(inDimLen) -> Some(inDimLen, inDimLen)
-                                | None, None -> None) None
-                        let wis = 
-                            match dimLen with
-                            | Some (minDim,maxDim) -> outdatedItems maxDim (fun j -> if j < minDim then VertexState.Outdated else VertexState.Unassigned)
-                            | None -> failwith "Unexpected case: the vertex should be downstream of the succeeded vector vertex"
-                        replace state w (ws |> MdMap.set i wis)
-                    | None -> state // doesn't depend on the target dimension
-            ) state
+                    let ws = state.State.FlowState.[w]
+                    match ws |> MdMap.tryGet i with
+                        | Some _ ->
+                            let dimLen = 
+                                w 
+                                |> dag.InEdges 
+                                |> Seq.map (fun (inedge:Edge<_>) -> getDimLength inedge.Source inedge.Type inedge.OutputRef) 
+                                |> Seq.fold(fun (dimLen:(int*int) option) (inDimLen:int option) ->
+                                    match dimLen, inDimLen with
+                                    | Some(minDim,maxDim), Some(inDimLen) -> Some(min minDim inDimLen, max maxDim inDimLen)
+                                    | Some(dimLen), None -> Some(dimLen)
+                                    | None, Some(inDimLen) -> Some(inDimLen, inDimLen)
+                                    | None, None -> None) None
+                            let wis = 
+                                match dimLen with
+                                | Some (0,0) -> 
+                                    let shape = List.init w.Outputs.Length (fun _ -> 0)
+                                    VertexState.Final shape |> MdMap.scalar
+                                | Some (minDim,maxDim) -> outdatedItems maxDim (fun j -> if j < minDim then VertexState.Outdated else VertexState.Unassigned)
+                                | None -> failwith "Unexpected case: the vertex should be downstream of the succeeded vector vertex"
+                            replace state w (ws |> MdMap.set i wis)
+                        | None -> state // doesn't depend on the target dimension
+                ) state
+        let state3 = final |> Seq.fold(fun state f -> makeIncomplete state (f,i) IncompleteReason.OutdatedInputs) state2
+        state3
        
 
     let rec makeStartOrIncomplete (state : StateUpdate) (vi : VertexItem) : StateUpdate =
@@ -358,9 +372,12 @@ module StateMachine =
         | _ -> // has unassigned inputs
             makeIncomplete state vi IncompleteReason.UnassignedInputs
 
-    and downstreamStartOrIncomplete (state : StateUpdate) (vi : VertexItem) = 
+    and downstreamStartOrIncomplete (state : StateUpdate) (vi : VertexItem) : StateUpdate = 
         enumerateDownstream state.State vi
-        |> Seq.fold (fun s wj -> makeStartOrIncomplete s wj) state
+        |> Seq.fold (fun s wj -> 
+            match vertexStatus s.State wj with
+            | Final _ when List.length (snd wj) < vertexRank (fst wj) state.State.Graph.Structure -> downstreamStartOrIncomplete s wj
+            | _ -> makeStartOrIncomplete s wj) state
 
 
     and downstreamStartOrReproduce (state : StateUpdate) (vi : VertexItem) =
@@ -369,16 +386,17 @@ module StateMachine =
             |> Seq.forall(fun (_, status) -> match status with Some Transient -> false | _ -> true)
 
         enumerateDownstream state.State vi
-        |> Seq.fold (fun s wj -> 
+        |> Seq.fold (fun state wj -> 
             let ws = vertexState state.State wj
             match ws.Status with
-            | VertexStatus.ReproduceRequested shape -> update state wj { ws with Status = VertexStatus.Reproduces (state.State.TimeIndex, shape) }
+            | VertexStatus.ReproduceRequested shape when allInputs wj -> update state wj { ws with Status = VertexStatus.Reproduces (state.State.TimeIndex, shape) }
             | VertexStatus.Final_MissingInputOnly shape when allInputs wj -> update state wj { ws with Status = VertexStatus.Final shape }
             | VertexStatus.Final_MissingInputOutput shape when allInputs wj -> update state wj { ws with Status = VertexStatus.Final_MissingOutputOnly shape } 
             
             | VertexStatus.Paused_MissingInputOnly shape when allInputs wj -> update state wj { ws with Status = VertexStatus.Paused shape } 
             | VertexStatus.Paused_MissingInputOutput shape when allInputs wj -> update state wj { ws with Status = VertexStatus.Paused_MissingOutputOnly shape }             
 
+            | VertexStatus.ReproduceRequested _
             | VertexStatus.Paused _ 
             | VertexStatus.Paused_MissingOutputOnly _
             | VertexStatus.Paused_MissingInputOnly _

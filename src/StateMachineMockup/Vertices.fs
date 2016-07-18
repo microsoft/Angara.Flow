@@ -55,4 +55,5 @@ type VertexState =
 
     static member Outdated = { Status = Incomplete OutdatedInputs }
     static member Unassigned = { Status = Incomplete UnassignedInputs }
+    static member Final shape = { Status = Final shape }
 

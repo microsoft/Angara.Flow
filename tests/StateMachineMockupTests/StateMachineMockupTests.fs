@@ -301,11 +301,11 @@ let ``All methods are reproduced if a final transient method depends on two inte
         return! node1 "c" [a;b]
     }
 
-                        state (g, ["a", Final_MissingOutputOnly [0]; "b", Final_MissingInputOutput [0]; "c", Final_MissingInputOutput [0]], 0UL)
+                        (*state (g, ["a", Final_MissingOutputOnly [0]; "b", Final_MissingInputOutput [0]; "c", Final_MissingInputOutput [0]], 0UL)
     |> start "c"
     |>           check (state (g, ["a", Reproduces (1UL,[0]); "b", ReproduceRequested [0]; "c", ReproduceRequested [0]], 1UL))
     |> iteration "a" 1UL
-    |>           check (state (g, ["a", Reproduces (1UL,[0]); "b", ReproduceRequested [0]; "c", ReproduceRequested [0]], 2UL))
+    |>           check *)state (g, ["a", Reproduces (1UL,[0]); "b", ReproduceRequested [0]; "c", ReproduceRequested [0]], 2UL) //)
     |> succeeded "a" 1UL
     |>           check (state (g, ["a", Final [0]; "b", Reproduces (3UL,[0]); "c", ReproduceRequested [0]], 3UL))
     |> iteration "b" 3UL
@@ -343,9 +343,9 @@ let ``Scatter: A method with input of type T can be connected to a method produc
     }
 
 
-                        mdState (g, ["a", scalar (CanStart 0UL); "b", vector []], 0UL)
+                        mdState (g, ["a", scalar (CanStart 0UL); "b", scalar (Incomplete OutdatedInputs)], 0UL)
     |> start "a"
-    |>           check (mdState (g, ["a", scalar (Started 1UL); "b", vector []], 1UL))
+    |>           check (mdState (g, ["a", scalar (Started 1UL); "b", scalar (Incomplete OutdatedInputs)], 1UL))
     |> iteration_array "a" 1UL [2]
     |>           check (mdState (g, ["a", scalar (Continues (1UL,[2])); "b", vector [CanStart 2UL; CanStart 2UL]], 2UL))
     |> mdStart ("b",[0])
@@ -377,23 +377,66 @@ let ``Reduce: If a method producing T is multiplied and produces T[], it can be 
     |>           check (mdState (g, ["a", scalar (Final [2]); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (CanStart 5UL)], 5UL))
     |> ignore
 
-//[<Test>]
-//let ``Reduce: if the scattering method produces an empty array, the reducing method should be executed for an empty input array as well``() =
-//    let g = graph { 
-//        let! a = scatter_node1 "a" []
-//        let! b = node1 "b" [a]
-//        return! reduce_node1 "c" b
-//    }
-//
-//                        mdState (g, ["a", scalar (Continues (0UL,[2])); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (Continues (5UL, [0]))], 5UL)
-//    |> iteration_array "a" 0UL [0]
-//    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); "b", emptyVector Uptodate; "c", scalar (CanStart 6UL)], 6UL))
-//    |> ignore
+[<Test; Category("Scenario")>]
+let ``Reduce: if the scattering method produces an empty array, the reducing method should be executed for an empty input array as well``() =
+    let g = graph { 
+        let! a = scatter_node1 "a" []
+        let! b = node1 "b" [a]
+        return! reduce_node1 "c" b
+    }
+
+                        mdState (g, ["a", scalar (Continues (0UL,[2])); "b", vector [Continues (0UL, [0]); Continues (1UL, [0])]; "c", scalar (Continues (5UL, [0]))], 5UL)
+    |> iteration_array "a" 0UL [0]
+    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); "b", scalar (Final [0]); "c", scalar (CanStart 6UL)], 6UL))
+    |> iteration_array "a" 0UL [1]
+    |>           check (mdState (g, ["a", scalar (Continues (0UL,[1])); "b", vector [CanStart 7UL]; "c", scalar (Incomplete OutdatedInputs)], 7UL))
+    |> ignore
 
 
+[<Test>]
+let ``Reduce: chain of methods depeding on scatter method producing an empty array``() =
+    let g = graph { 
+        let! a = scatter_node1 "a" []
+        let! c = node1 "c" [a]
+        let! d = node1 "d" [c]
+        let! e = node1 "e" [c;d]
+        return! reduce_node1 "f" e
+    }
 
-// Zero-length array
-// Transient vectors
-// Empty reduce when upstream
-// Reproduce succeed R -> Inc must update shape of Inc
-// u[1]→v,w[2]→v, in this case v is one-dimensional and has to items, since w produces two items; but because u produced only one item, second item of v is "incomplete" unless u re-executes and produces at least two items
+                        mdState (g, ["a", scalar (Continues (0UL,[1])); 
+                                     "c", vector [Continues (0UL, [0])]; "d", vector [Continues (0UL, [0])];
+                                     "e", vector [Continues (0UL, [0])];
+                                     "f", scalar (Continues (0UL,[1])) ], 1UL)
+    |> iteration_array "a" 0UL [0]
+    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); 
+                                     "c", scalar (Final [0]); "d", scalar (Final [0]);
+                                     "e", scalar (Final [0]);
+                                     "f", scalar (CanStart 2UL) ], 2UL))
+    |> ignore
+
+[<Test; Category("Scenario")>]
+let ``Reduce: vector method has two inputs and one of them produces empty array, another produces non-empty array``() =
+    let g = graph { 
+        let! a = scatter_node1 "a" []
+        let! b = scatter_node1 "b" []
+        let! c = node1 "c" [a]
+        let! d = node1 "d" [b]
+        let! e = node1 "e" [c;d]
+        return! reduce_node1 "f" e
+    }
+
+                        mdState (g, ["a", scalar (Continues (0UL,[1])); "b", scalar (Continues (0UL,[1])); 
+                                     "c", vector [Continues (0UL, [0])]; "d", vector [Continues (0UL, [0])];
+                                     "e", vector [Continues (0UL, [0])];
+                                     "f", scalar (Continues (0UL,[1])) ], 1UL)
+    |> iteration_array "a" 0UL [0]
+    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); "b", scalar (Continues (0UL,[1])); 
+                                     "c", scalar (Final [0]); "d", vector [Continues (0UL, [0])]; 
+                                     "e", vector [Incomplete UnassignedInputs]; // "e" has length because it is connected to "d" which still has shape 1.
+                                     "f", scalar (Incomplete OutdatedInputs) ], 2UL))
+    |> iteration_array "b" 0UL [0]
+    |>           check (mdState (g, ["a", scalar (Continues (0UL,[0])); "b", scalar (Continues (0UL,[0])); 
+                                     "c", scalar (Final [0]); "d", scalar (Final [0]); 
+                                     "e", scalar (Final [0]);
+                                     "f", scalar (CanStart 3UL) ], 3UL))
+    |> ignore
