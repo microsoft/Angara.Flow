@@ -59,9 +59,6 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="FsCheckAddin.fs">
-      <Paket>True</Paket>
-    </Compile>
     <Compile Include="GraphTests.fs" />
     <Compile Include="StateMachineTests.fs" />
     <None Include="Script.fsx" />

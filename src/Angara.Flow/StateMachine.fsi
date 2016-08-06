@@ -70,20 +70,29 @@ module StateMachine =
         member IsIncompleteReason : IncompleteReason -> bool
         member TryGetShape : unit -> OutputShape option
 
+    
+    /// Allows to get certain information about vertex outputs, 
+    /// which is necessary for the state machine.
+    [<Interface>]
+    type IVertexData =
+        abstract member Shape : OutputShape
+
     /// Keeps status and data of a vertex as part of the StateMachine state.
-    [<AbstractClass>]
     type VertexState = 
-        /// Keeps status of the vertex in terms of the state machine.
-        member Status : VertexStatus
-        /// Returns a clone of the vertex state which has the given status.
-        member WithStatus : VertexStatus -> VertexState
-    // How to create new? - real VertexState type is generic type parameter which has a constructor
+        {
+            /// Keeps status of the vertex in terms of the state machine.
+            Status : VertexStatus
+            Data : IVertexData option
+        }
+
+    type VertexItem<'v when 'v:comparison and 'v:>IVertex> = 'v * VertexIndex
 
     /// An immutable type which keeps state for the StateMachine.
     type State<'v when 'v:comparison and 'v:>IVertex> =
         { Graph : DataFlowGraph<'v>
           FlowState : DataFlowState<'v, VertexState> 
           TimeIndex : TimeIndex }    
+
 
     ////////////////////////
     //
@@ -103,6 +112,10 @@ module StateMachine =
         | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState> * current:MdVertexState<VertexState> * isConnectionChanged:bool 
     
     type Changes<'v when 'v : comparison> = Map<'v, VertexChanges>
+    
+    type StateUpdate<'v when 'v:comparison and 'v:>IVertex> = 
+        { State : State<'v>
+          Changes : Changes<'v> }
 
     ////////////////////////
     //
@@ -114,21 +127,6 @@ module StateMachine =
         | Success       of 'a
         | Exception     of System.Exception
     type ReplyChannel<'a> = Response<'a> -> unit
-
-    type AlterConnection<'v> =
-        | ItemToItem    of target: ('v * InputRef) * source: ('v * OutputRef)
-        | ItemToArray   of target: ('v * InputRef) * source: ('v * OutputRef)
-
-    type RemoveStrategy = FailIfHasDependencies | DontRemoveIfHasDependencies
-
-    /// A message for the state machine which describes a batch of operations
-    /// to be performed by the state machine atomically in the certain order:
-    /// disconnect vertices; remove vertices; merge graph; connect vertices.
-    type AlterMessage<'v when 'v:comparison and 'v:>IVertex> =
-        { Disconnect:  (('v * InputRef) * ('v * OutputRef) option) list 
-          Remove:      ('v * RemoveStrategy) list 
-          Merge:       DataFlowGraph<'v> * DataFlowState<'v,VertexState>
-          Connect:     AlterConnection<'v> list }
 
     /// A message for the state machine which says that the vertex should be started,
     /// if it is in a proper state. 
@@ -164,33 +162,13 @@ module StateMachine =
           Failure: exn
           StartTime: TimeIndex }
 
-
-    /// Determines how the local proxy of a remote vertex gets the output.
-    type RemoteVertexExecution = 
-        /// The vertex output can be fetched from a remote node.
-        | Fetch 
-        /// The vertex output cannot be fetched and should be computed locally.
-        | Compute
-
-    type SucceededRemoteVertexItem<'v> = 
-        { Vertex: 'v 
-          Slice: VertexIndex
-          OutputShape: int list 
-          CompletionTime: TimeIndex
-          Execution: RemoteVertexExecution }
-
-    type RemoteVertexSucceeded<'v> = 'v * SucceededRemoteVertexItem<'v> list
-
     /// Represents messages processed by the `StateMachine`.
     type Message<'v,'d when 'v:comparison and 'v:>IVertex> =
-        | Alter         of AlterMessage<'v,'d> * reply: ReplyChannel<unit>
         /// Starts methods. Replies true, if method is started; otherwise, false.
         | Start         of StartMessage<'v> * ReplyChannel<bool>
         | Stop          of 'v
-        | Succeeded     of SucceededMessage<'v,'d>
+        | Succeeded     of SucceededMessage<'v,'d> // todo: hot/cold final artefacts (incl. distributed case)
         | Failed        of FailedMessage<'v>
-        /// Todo: will be combined with `Succeeded`
-        | RemoteSucceeded of RemoteVertexSucceeded<'v> 
 
     ////////////////////////
     //
@@ -198,22 +176,13 @@ module StateMachine =
     //
     ////////////////////////
 
-    /// Allows to get certain information about vertex outputs, 
-    /// which is necessary for the state machine.
-    [<Interface>]
-    type IVertexData =
-        /// Returns a value indicating whether the data is available; if not, it should be re-evaluated.
-        abstract member Contains : OutputRef -> bool
-        /// If the data contains the given output and the output is a one-dimensional array,
-        /// returns length of the array; otherwise, returns `None`.
-        abstract member TryGetShape : OutputRef -> int option
 
     /// Returns a new state such that each of the graph vertices has a correct state.
     /// The given vertex state is used as-is but is checked for correctness;
     /// if it has missing states, they are filled with a state based on the dependency graph.
     /// The returned graph and time index are identical to the original graph and time index.
     /// The returned changes describe the changes made in the returned state if compare to the given state.
-    val normalize<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> : DataFlowGraph<'v> * DataFlowState<'v,VertexState<'d>> -> DataFlowState<'v,VertexState<'d>> * Changes<'v,'d>
+    val normalize<'v when 'v:comparison and 'v:>IVertex> : DataFlowGraph<'v> * DataFlowState<'v,VertexState> -> DataFlowState<'v,VertexState> * Changes<'v>
     
 open StateMachine
 

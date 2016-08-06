@@ -54,14 +54,16 @@
     <Compile Include="MdMap.fs" />
     <Compile Include="Graph.fsi" />
     <Compile Include="Graph.fs" />
-    <Compile Include="StateMachine.fsi" />
+    <Compile Include="State.fs" />
+    <Compile Include="StateTransitions.fs" />
+    <None Include="StateMachine.fsi" />
     <Compile Include="StateMachine.fs" />
-    <Compile Include="Execution.fsi" />
-    <Compile Include="Execution.fs" />
-    <Compile Include="Flow.fsi" />
-    <Compile Include="Flow.fs" />
-    <Compile Include="Methods.fsi" />
-    <Compile Include="Methods.fs" />
+    <None Include="Execution.fsi" />
+    <None Include="Execution.fs" />
+    <None Include="Flow.fsi" />
+    <None Include="Flow.fs" />
+    <None Include="Methods.fsi" />
+    <None Include="Methods.fs" />
   </ItemGroup>
   <PropertyGroup>
     <MinimumVisualStudioVersion Condition="'$(MinimumVisualStudioVersion)' == ''">11</MinimumVisualStudioVersion>

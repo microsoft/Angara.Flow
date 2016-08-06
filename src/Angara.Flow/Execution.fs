@@ -434,7 +434,7 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
             cancel (v,slice) cancels
             cancels.Add((v,slice), cts)
 
-        | Reproduce (v,slice,time) ->
+        | Reproduce (v,slice,time) -> failwith ""
             
 
         | Remove v -> 
