@@ -78,33 +78,6 @@ module internal TransitionEffects =
             return vs.Status
         }
 
-
-    let update (update : StateUpdate<'v>) (v : 'v, i : VertexIndex) (vsi : VertexState) =
-        let vs = update.State.FlowState |> Map.find v
-        let nvs = vs |> MdMap.add i vsi
-        let c = 
-            match update.Changes |> Map.tryFind v with
-            | Some(New _) -> New(nvs)
-            | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,nvs,connChanged)
-            | Some(Modified(indices,oldvs,_,connChanged)) -> Modified(indices |> Set.add i, oldvs, nvs, connChanged)
-            | Some(Removed) -> failwith "Removed vertex cannot be modified"
-            | None -> Modified(Set.empty |> Set.add i, vs, nvs, false) 
-
-        { State = { update.State with FlowState = update.State.FlowState |> Map.add v nvs }
-          Changes = update.Changes.Add(v, c) }
-
-    let replace (update : StateUpdate<'v>) (v : 'v) (vs : MdMap<int,VertexState>) =
-        let c = 
-            match update.Changes |> Map.tryFind v with
-            | Some(New _) -> New(vs)
-            | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
-            | Some(Modified(_,oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
-            | Some(Removed) -> failwith "Removed vertex cannot be modified"
-            | None -> ShapeChanged(update.State.FlowState.[v],vs,false)
-
-        { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
-          Changes = update.Changes.Add(v, c) }
-    
     
     /// Returns a sequence of vertex items that are immediate downstream vertex items which are represented in the flow state.
     let enumerateDownstream (state : State<'v>) (v : 'v, i : VertexIndex) : VertexItem<'v> seq =
@@ -417,3 +390,64 @@ module internal TransitionEffects =
             | UpstreamStartOrReproduce -> upstreamStartOrReproduce state3 vi
 
         state4
+
+
+[<AutoOpen>]        
+module Normalization =
+    
+    open TransitionEffects
+    open StateOperations
+
+    /// Builds an incomplete state for the given vertex depending on states of its input vertices.
+    let internal buildVertexState<'v when 'v:comparison and 'v:>IVertex> (update : StateUpdate<'v>) v =            
+        let outdatedItems n item = Seq.init n id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] (item j)) MdMap.empty
+
+        let edgeState (e:Edge<_>) = 
+            let vs = update.State.FlowState.[e.Source]
+            let outdated = MdMap.scalar VertexState.Outdated
+            match e.Type with 
+            | ConnectionType.OneToOne _ | ConnectionType.Collect _ -> vs
+            | ConnectionType.Reduce rank -> vs |> MdMap.trim rank (fun _ _ -> outdated) // e.Source has rank `rank+1`; trimming to `rank`
+            | ConnectionType.Scatter rank -> // e.Source is has rank `rank-1`; extending to `rank`
+                vs |> MdMap.trim (rank-1) (fun _ m -> // function called for each of vertex state with index of length `rank-1`
+                    // m is always scalar since e.Source rank is `rank-1`
+                    match m.AsScalar().Data |> Option.map(fun data -> data.Shape.[e.OutputRef]) with
+                    | Some shape -> outdatedItems shape (fun _ -> VertexState.Outdated)
+                    | None -> outdated)
+        let vs = 
+            match allInputsAssigned update.State v with
+            | false -> MdMap.scalar VertexState.Unassigned
+            | true ->
+                let inStates = update.State.Graph.Structure.InEdges v |> Seq.map(fun e -> edgeState e) |> Seq.toList
+                match inStates with
+                | [] -> MdMap.scalar VertexState.Outdated
+                | [invs] -> invs |> MdMap.map(fun _ -> VertexState.Outdated) 
+                | _ -> inStates |> Seq.reduce(MdMap.merge (fun _ -> VertexState.Outdated))
+        replace update v vs
+
+
+
+    let normalize (state : State<'v>) : StateUpdate<'v> = 
+        let dag = state.Graph.Structure
+        let update = // adding missing vertex states 
+            dag.TopoFold(fun (update : StateUpdate<'v>) v _ -> 
+                match update.State.FlowState.TryFind v with
+                | Some _ -> update
+                | None -> 
+                    let update2 = add update v (MdMap.scalar VertexState.Unassigned)
+                    buildVertexState update2 v
+                ) { State = state; Changes = Map.empty }
+        
+        // We should start methods, if possible
+        let flowState = update.State.FlowState
+        let update2 = 
+            dag.Vertices 
+            |> Seq.map(fun v -> 
+                flowState.[v] |> MdMap.toSeq |> Seq.filter (fun (index,vis) -> 
+                    match vis.Status with
+                    | VertexStatus.Incomplete _ -> true
+                    | VertexStatus.Final _ -> false
+                    | x -> failwith (sprintf "Vertex %O.[%A] has status %O which is not allowed in an initial state" v index x))
+                |>Seq.map(fun q -> (v,q))) |> Seq.concat
+            |> Seq.fold (fun update (v,(i,_)) -> makeStartOrIncomplete update (v,i)) update
+        update2

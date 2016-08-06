@@ -60,7 +60,10 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="GraphTests.fs" />
-    <Compile Include="StateMachineTests.fs" />
+    <Compile Include="GraphExpression.fs" />
+    <Compile Include="StateOperations.fs" />
+    <Compile Include="StateTransitionsSpecs.fs" />
+    <Compile Include="StateOperationsTests.fs" />
     <None Include="Script.fsx" />
     <None Include="paket.references" />
     <None Include="App.config" />

@@ -37,6 +37,7 @@ type VertexStatus =
     | ReproduceRequested of OutputShape   
     | Incomplete                of reason: IncompleteReason
    
+    override x.ToString() = sprintf "%A" x
     member x.IsUpToDate = match x with Final _ | Reproduces _ | ReproduceRequested _ | Paused _ | Continues _ -> true | _ -> false
     member x.IsIncompleteReason reason = match x with Incomplete r when r = reason -> true | _ -> false
     member x.TryGetShape() = 
@@ -65,6 +66,7 @@ type VertexState =
     { Status : VertexStatus
       Data : IVertexData option
     } with 
+    override x.ToString() = sprintf "Vertex is %A" x.Status
     static member Unassigned : VertexState = 
         { Status = VertexStatus.Incomplete (IncompleteReason.UnassignedInputs); Data = None }
     static member Outdated : VertexState = 
@@ -93,5 +95,35 @@ type VertexItem<'v when 'v:comparison and 'v:>IVertex> = 'v * VertexIndex
 
 [<AutoOpen>]
 module StateOperations =
-    let normalize (state : State<'v>) : StateUpdate<'v> = // todo
-        { State = state; Changes = Map.empty }
+    open Angara.Data
+
+    let add (update : StateUpdate<_>) v vs = 
+        { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
+          Changes = update.Changes |> Map.add v (VertexChanges.New vs) }
+
+    let update (update : StateUpdate<'v>) (v : 'v, i : VertexIndex) (vsi : VertexState) =
+        let vs = update.State.FlowState |> Map.find v
+        let nvs = vs |> MdMap.add i vsi
+        let c = 
+            match update.Changes |> Map.tryFind v with
+            | Some(New _) -> New(nvs)
+            | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,nvs,connChanged)
+            | Some(Modified(indices,oldvs,_,connChanged)) -> Modified(indices |> Set.add i, oldvs, nvs, connChanged)
+            | Some(Removed) -> failwith "Removed vertex cannot be modified"
+            | None -> Modified(Set.empty |> Set.add i, vs, nvs, false) 
+
+        { State = { update.State with FlowState = update.State.FlowState |> Map.add v nvs }
+          Changes = update.Changes.Add(v, c) }
+
+    let replace (update : StateUpdate<'v>) (v : 'v) (vs : MdMap<int,VertexState>) =
+        let c = 
+            match update.Changes |> Map.tryFind v with
+            | Some(New _) -> New(vs)
+            | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
+            | Some(Modified(_,oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
+            | Some(Removed) -> failwith "Removed vertex cannot be modified"
+            | None -> ShapeChanged(update.State.FlowState.[v],vs,false)
+
+        { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
+          Changes = update.Changes.Add(v, c) }
+
