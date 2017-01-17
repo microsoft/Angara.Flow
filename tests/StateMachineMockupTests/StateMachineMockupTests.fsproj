@@ -58,6 +58,9 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="FsCheckAddin.fs">
+      <Paket>True</Paket>
+    </Compile>
     <Compile Include="NUnitRunner.fs" />
     <Compile Include="StateOperations.fs" />
     <Compile Include="StateMachineMockupTests.fs" />
@@ -77,6 +80,13 @@
     </Otherwise>
   </Choose>
   <Import Project="$(FSharpTargetsPath)" />
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\StateMachineMockup\StateMachineMockup.fsproj">
+      <Name>StateMachineMockup</Name>
+      <Project>{f6803eef-9181-4120-94c8-707e31b9473b}</Project>
+      <Private>True</Private>
+    </ProjectReference>
+  </ItemGroup>
   <Choose>
     <When Condition="$(TargetFrameworkIdentifier) == '.NETFramework' And ($(TargetFrameworkVersion) == 'v4.5' Or $(TargetFrameworkVersion) == 'v4.5.1' Or $(TargetFrameworkVersion) == 'v4.5.2' Or $(TargetFrameworkVersion) == 'v4.5.3' Or $(TargetFrameworkVersion) == 'v4.6' Or $(TargetFrameworkVersion) == 'v4.6.1' Or $(TargetFrameworkVersion) == 'v4.6.2')">
       <ItemGroup>
@@ -218,12 +228,5 @@
       <Private>True</Private>
       <Paket>True</Paket>
     </Reference>
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\StateMachineMockup\StateMachineMockup.fsproj">
-      <Name>StateMachineMockup</Name>
-      <Project>{f6803eef-9181-4120-94c8-707e31b9473b}</Project>
-      <Private>True</Private>
-    </ProjectReference>
   </ItemGroup>
 </Project>

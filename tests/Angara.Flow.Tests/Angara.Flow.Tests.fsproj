@@ -54,11 +54,20 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="mscorlib" />
+    <Reference Include="nunit.core">
+      <HintPath>..\..\packages\test\NUnit.Runners\tools\lib\nunit.core.dll</HintPath>
+    </Reference>
+    <Reference Include="nunit.core.interfaces">
+      <HintPath>..\..\packages\test\NUnit.Runners\tools\lib\nunit.core.interfaces.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="FsCheckAddin.fs">
+      <Paket>True</Paket>
+    </Compile>
     <Compile Include="GraphTests.fs" />
     <Compile Include="GraphExpression.fs" />
     <Compile Include="StateOperations.fs" />

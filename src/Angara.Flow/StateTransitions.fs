@@ -59,6 +59,7 @@ module internal VertexTransitions =
 
 module internal TransitionEffects =
     open VertexTransitions
+    open StateOperations
 
     let vertexState (state : State<'v>) (v : 'v, i : VertexIndex) =
         state.FlowState |> Map.find v |> MdMap.tryFind i |> Option.get

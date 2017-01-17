@@ -54,9 +54,10 @@
     <Compile Include="MdMap.fs" />
     <Compile Include="Graph.fsi" />
     <Compile Include="Graph.fs" />
+    <Compile Include="State.fsi" />
     <Compile Include="State.fs" />
     <Compile Include="StateTransitions.fs" />
-    <None Include="StateMachine.fsi" />
+    <Compile Include="StateMachine.fsi" />
     <Compile Include="StateMachine.fs" />
     <None Include="Execution.fsi" />
     <None Include="Execution.fs" />

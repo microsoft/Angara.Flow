@@ -101,7 +101,8 @@ module StateOperations =
         { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
           Changes = update.Changes |> Map.add v (VertexChanges.New vs) }
 
-    let update (update : StateUpdate<'v>) (v : 'v, i : VertexIndex) (vsi : VertexState) =
+    let update (update : StateUpdate<'v>) (vi : VertexItem<'v>) (vsi : VertexState) =
+        let v, i = vi
         let vs = update.State.FlowState |> Map.find v
         let nvs = vs |> MdMap.add i vsi
         let c = 
