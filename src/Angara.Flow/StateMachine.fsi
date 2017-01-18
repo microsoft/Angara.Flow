@@ -24,12 +24,12 @@ module Messages =
           /// otherwise, the vertex will not start and the replied value is `false`.
           /// This allows to guarantee that the vertex of the observed state is started.
           CanStartTime: TimeIndex option }
-          
+
     /// A message that contains results for the next iteration of method execution.
-    type IterationMessage<'v> =
+    type IterationMessage<'v,'d> =
         { Vertex: 'v
           Index: VertexIndex          
-          Result: IVertexData
+          Result: 'd
           StartTime: TimeIndex }
 
     /// A message notifying the method execution is successfully completed and the last iteration was final.
@@ -51,18 +51,18 @@ module Messages =
         { Vertex: 'v
           Index: VertexIndex }
 
-    /// Represents messages processed by the `StateMachine`.
-    type Message<'v when 'v:comparison and 'v:>IVertex> =
+    /// Represents an operation over state.
+    type Message<'v,'d> =
         /// Starts methods. Replies true, if method is started; otherwise, false.
         | Start         of StartMessage<'v> //* ReplyChannel<bool>
         | Stop          of StopMessage<'v>
-        | Iteration     of IterationMessage<'v>
+        | Iteration     of IterationMessage<'v,'d>
         | Succeeded     of SucceededMessage<'v> // todo: hot/cold final artefacts (incl. distributed case, June/July 2016)
         | Failed        of FailedMessage<'v>
 
     
     /// Produces new state and state changes for the given state and a message.
-    val transition : Message<'v> -> State<'v> -> StateUpdate<'v>
+    val transition : Message<'v,'d> -> State<'v,'d> -> StateUpdate<'v,'d>
 
 
 ////////////////////////
@@ -80,14 +80,14 @@ module Messages =
 //val normalize<'v when 'v:comparison and 'v:>IVertex> : DataFlowGraph<'v> * DataFlowState<'v,VertexState> -> DataFlowState<'v,VertexState> * Changes<'v>
     
 [<Sealed>]
-type StateMachine<'v when 'v:comparison and 'v:>IVertex> = 
+type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> = 
     interface System.IDisposable
-    member State : State<'v>
+    member State : State<'v,'d>
     member Start : unit -> unit    
-    member Changes : System.IObservable<StateUpdate<'v>>
+    member Changes : System.IObservable<StateUpdate<'v,'d>>
 
     /// Creates new state machine from the given initial state. 
     /// The state machine will read messages from the `source` which must be empty unless the state machine is started.
     /// To start the state machine, so that it will start reading and handling the messages, call `Start` method.
     /// The `matchOutput` function returns true, if both data objects contain the given output and the both outputs are equal.
-    static member CreateSuspended : source:System.IObservable<Messages.Message<'v>> -> initialState:State<'v> -> StateMachine<'v>
+    static member CreateSuspended : source:System.IObservable<Messages.Message<'v,'d>> -> initialState:State<'v,'d> -> StateMachine<'v,'d>

@@ -2,7 +2,8 @@
 
 open System
 open Angara.Graph
-open Angara.StateMachine
+open Angara.States
+
 
 /// Represents an element of a method output.
 /// Angara stores method outputs in a flow state and passes them as other methods arguments.
@@ -40,12 +41,12 @@ type Output =
 
 /// Keeps method evaluation state: output artefacts, inner state, trace information.
 [<Class>] 
-type MethodVertexData =
+type MethodOutput =
     interface IVertexData
 
     // todo: option for both Output * MethodCheckpoint?
 
-    /// Keeps output artefacts of the vertex. Can be missing, e.g. because of serialization limitations.
+    /// Keeps output artefacts of the vertex. Can be missing if some or all output artefacts couldn't be deserialized.
     member Output : Output
     /// Contains information sufficient to reproduce the corresponding outputs and continue the execution from the checkpoint.
     /// If `None`, the output hasn't been produced yet.
@@ -72,11 +73,11 @@ type Scheduler =
 /// makes the messages flow from the runtime to the state machine.
 [<Class>]
 type Engine =
-    new : DataFlowGraph<Method> * DataFlowState<Method,VertexState<MethodVertexData>> * Scheduler -> Engine
+    new : State<Method, MethodOutput> * Scheduler -> Engine
     interface IDisposable
 
-    member State : State<Method, MethodVertexData>
-    member Changes : IObservable<State<Method, MethodVertexData> * Changes<Method, MethodVertexData>>
+    member State : State<Method, MethodOutput>
+    member Changes : IObservable<StateUpdate<Method, MethodOutput>>
     /// Allows to see progress of method evaluation.
     member Progress : IObservable<Method * VertexIndex * float>
     member Start : unit -> unit
@@ -84,5 +85,5 @@ type Engine =
     /// Alters the flow dependency graph by performing the batch of operations in the specific order:
     /// disconnect vertices; remove vertices; merge with another graph; connect vertices.
     /// The operation asynchronously completes when all the operations succeed.
-    member AlterAsync : AlterMessage<Method,MethodVertexData> -> Async<unit>
+    //member AlterAsync : AlterMessage<Method,MethodVertexData> -> Async<unit>
 

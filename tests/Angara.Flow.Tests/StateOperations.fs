@@ -6,12 +6,17 @@ open Angara.Graph
 open Angara.States
 open GraphExpression
 
+type VertexOutput(shape:OutputShape) = 
+    interface IVertexData with
+        member x.Shape = shape
+
 let internal exprToGraph = System.Collections.Generic.Dictionary<Graph, Angara.Graph.DataFlowGraph<Vertex> * Map<string, Vertex>>()
 
 let vector (statuses : VertexStatus list) =
     statuses |> Seq.mapi(fun i v -> i,v) |> Seq.fold (fun map (i,v) -> MdMap.add [i] v map) MdMap.empty
 
-let data s = { new IVertexData with member x.Shape = s }
+let data s = VertexOutput s 
+
 
 let mdState (graphExpr:Graph, statuses:(string* MdMap<int,VertexStatus>) list, timeIndex : TimeIndex) =
     let flowGraph, nameToVertex = 
@@ -22,7 +27,7 @@ let mdState (graphExpr:Graph, statuses:(string* MdMap<int,VertexStatus>) list, t
             exprToGraph.Add(graphExpr, p)
             p
         
-    let flowState : Map<Vertex, MdMap<int,VertexState>> = 
+    let flowState : Map<Vertex, MdMap<int,VertexState<VertexOutput>>> = 
         statuses 
         |> List.fold(fun map (nodeName, status) -> 
             let status2 = status |> MdMap.map(fun st -> { Status = st; Data = None })
@@ -34,35 +39,35 @@ let state (graphExpr:Graph, statuses:(string*VertexStatus) list, timeIndex : Tim
     let mstatuses = statuses |> List.map(fun (n,s) -> n, MdMap.scalar s)
     mdState (graphExpr, mstatuses, timeIndex)
 
-let takeState (stateUpdate : StateUpdate<Vertex>) = stateUpdate.State 
+let takeState (stateUpdate : StateUpdate<Vertex,VertexOutput>) = stateUpdate.State 
 
 module Message = Angara.States.Messages
 let transition = Angara.States.Messages.transition
 
-let mdStart (nodeName : string, i : VertexIndex) (state : State<Vertex>, nameToVertex: Map<string, Vertex>) =
+let mdStart (nodeName : string, i : VertexIndex) (state : State<Vertex,VertexOutput>, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Start ({ Message.StartMessage.Vertex = nameToVertex.[nodeName];  Message.StartMessage.Index = i;  Message.StartMessage.CanStartTime = None } )), nameToVertex
 
-let start (nodeName : string) (state : State<Vertex>, nameToVertex: Map<string, Vertex>) =
+let start (nodeName : string) (state : State<Vertex,VertexOutput>, nameToVertex: Map<string, Vertex>) =
     mdStart (nodeName, []) (state, nameToVertex)
 
-let mdIteration (nodeName : string, i : VertexIndex) (startTime : TimeIndex) (state : State<Vertex>, nameToVertex: Map<string, Vertex>) =
+let mdIteration (nodeName : string, i : VertexIndex) (startTime : TimeIndex) (state : State<Vertex,VertexOutput>, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Iteration { Message.IterationMessage.Vertex = nameToVertex.[nodeName];  Message.IterationMessage.Index = i;  Message.IterationMessage.Result = data [0];  Message.IterationMessage.StartTime = startTime }), nameToVertex
 
-let iteration (nodeName : string) (startTime : TimeIndex) (state : State<Vertex>, nameToVertex: Map<string, Vertex>) =
+let iteration (nodeName : string) (startTime : TimeIndex) (state : State<Vertex,VertexOutput>, nameToVertex: Map<string, Vertex>) =
     mdIteration (nodeName, []) startTime (state, nameToVertex)
 
 
-let iteration_array (nodeName : string) (startTime : TimeIndex) (shape : int list) (state : State<Vertex>, nameToVertex: Map<string, Vertex>) =
+let iteration_array (nodeName : string) (startTime : TimeIndex) (shape : int list) (state : State<Vertex,VertexOutput>, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Iteration { Message.IterationMessage.Vertex = nameToVertex.[nodeName];  Message.IterationMessage.Index = [];  Message.IterationMessage.Result = data shape;  Message.IterationMessage.StartTime = startTime }), nameToVertex
     
-let succeeded (nodeName : string) (startTime : TimeIndex) (state : State<Vertex>, nameToVertex: Map<string, Vertex>) =
+let succeeded (nodeName : string) (startTime : TimeIndex) (state : State<Vertex,VertexOutput>, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Succeeded { Message.SucceededMessage.Vertex = nameToVertex.[nodeName]; Message.SucceededMessage.Index = []; Message.SucceededMessage.StartTime = startTime }), nameToVertex
 
-let stop (nodeName : string) (state : State<Vertex>, nameToVertex: Map<string, Vertex>) =
+let stop (nodeName : string) (state : State<Vertex,VertexOutput>, nameToVertex: Map<string, Vertex>) =
     state |> transition (Message.Stop { Message.StopMessage.Vertex = nameToVertex.[nodeName]; Message.StopMessage.Index = [] }), nameToVertex
 
 
-let check (stateExp : State<Vertex>, nameToVertexExp: Map<string, Vertex>) (stateAct : StateUpdate<Vertex>, nameToVertexAct: Map<string, Vertex>) =
+let check (stateExp : State<Vertex,VertexOutput>, nameToVertexExp: Map<string, Vertex>) (stateAct : StateUpdate<Vertex,VertexOutput>, nameToVertexAct: Map<string, Vertex>) =
     let stateAct = stateAct.State
     Assert.AreEqual(nameToVertexExp, nameToVertexAct, sprintf "Different names (%d)" stateExp.TimeIndex)
     Assert.AreEqual(stateExp.Graph, stateAct.Graph, sprintf "Different graphs (%d)" stateExp.TimeIndex)

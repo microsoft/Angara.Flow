@@ -79,20 +79,23 @@ type IVertexData =
     abstract member Shape : OutputShape
     
 /// Keeps status and data of a vertex as part of the StateMachine state.
-type VertexState = 
+type VertexState<'d when 'd:>IVertexData> = 
     { 
       /// Keeps status of the vertex in terms of the state machine.
       Status : VertexStatus
-      Data : IVertexData option
+      Data : 'd option
     } with 
-    static member Unassigned : VertexState
-    static member Outdated : VertexState
-    static member Final : IVertexData -> VertexState
+    static member Unassigned : VertexState<'d>
+    static member Outdated : VertexState<'d>
+    static member Final : 'd -> VertexState<'d>
+    /// Creates a vertex state of given rank with zero shape output. Data is None in this case.
+    /// Otherwise we cannot create an instance of 'd in general.
+    static member FinalEmpty : rank:int -> VertexState<'d>
 
 /// An immutable type which keeps state for the StateMachine.
-type State<'v when 'v:comparison and 'v:>IVertex> =
+type State<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
     { Graph : DataFlowGraph<'v>
-      FlowState : DataFlowState<'v, VertexState> 
+      FlowState : DataFlowState<'v, VertexState<'d>> 
       TimeIndex : TimeIndex }
 
 
@@ -103,28 +106,28 @@ type State<'v when 'v:comparison and 'v:>IVertex> =
 ////////////////////////
 
 /// Describes changes that can occur with dataflow vertex.
-type VertexChanges = 
+type VertexChanges<'d when 'd:>IVertexData> = 
     /// New vertex is added.
-    | New of MdVertexState<VertexState>
+    | New of MdVertexState<VertexState<'d>>
     /// Vertex is removed.
     | Removed 
     /// Shape of a vertex state probably is changed.
-    | ShapeChanged of old:MdVertexState<VertexState> * current:MdVertexState<VertexState> * isConnectionChanged:bool 
+    | ShapeChanged of old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     /// Some items of a vertex state are changed.
-    | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState> * current:MdVertexState<VertexState> * isConnectionChanged:bool 
+    | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     
-type Changes<'v when 'v : comparison> = Map<'v, VertexChanges>
+type Changes<'v,'d when 'v : comparison and 'd:>IVertexData> = Map<'v, VertexChanges<'d>>
 
-type StateUpdate<'v when 'v:comparison and 'v:>IVertex> = 
-    { State : State<'v>
-      Changes : Changes<'v> }
+type StateUpdate<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> = 
+    { State : State<'v,'d>
+      Changes : Changes<'v,'d> }
 
 type VertexItem<'v when 'v:comparison and 'v:>IVertex> = 'v * VertexIndex
 
 module StateOperations =
     open Angara.Data
 
-    val add : StateUpdate<'v> -> 'v -> MdMap<int,VertexState> -> StateUpdate<'v>
-    val update : StateUpdate<'v> -> VertexItem<'v> -> VertexState -> StateUpdate<'v>
-    val replace : StateUpdate<'v> -> 'v -> MdMap<int,VertexState> -> StateUpdate<'v>
+    val add : StateUpdate<'v,'d> -> 'v -> MdMap<int,VertexState<'d>> -> StateUpdate<'v,'d>
+    val update : StateUpdate<'v,'d> -> VertexItem<'v> -> VertexState<'d> -> StateUpdate<'v,'d>
+    val replace : StateUpdate<'v,'d> -> 'v -> MdMap<int,VertexState<'d>> -> StateUpdate<'v,'d>
 

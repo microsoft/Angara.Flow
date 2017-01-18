@@ -61,19 +61,19 @@ module internal TransitionEffects =
     open VertexTransitions
     open StateOperations
 
-    let vertexState (state : State<'v>) (v : 'v, i : VertexIndex) =
+    let vertexState (state : State<'v,'d>) (v : 'v, i : VertexIndex) =
         state.FlowState |> Map.find v |> MdMap.tryFind i |> Option.get
 
-    let tryVertexState (state : State<'v>) (v : 'v, i : VertexIndex) =
+    let tryVertexState (state : State<'v,'d>) (v : 'v, i : VertexIndex) =
         opt {
             let! vs = state.FlowState |> Map.tryFind v 
             return! MdMap.tryFind i vs
         }
 
-    let vertexStatus (state : State<'v>) (vi : VertexItem<'v>) =
+    let vertexStatus (state : State<'v,'d>) (vi : VertexItem<'v>) =
         (vertexState state vi).Status
 
-    let tryVertexStatus (state : State<'v>) (vi : VertexItem<'v>) =
+    let tryVertexStatus (state : State<'v,'d>) (vi : VertexItem<'v>) =
         opt { 
             let! vs = tryVertexState state vi
             return vs.Status
@@ -81,7 +81,7 @@ module internal TransitionEffects =
 
     
     /// Returns a sequence of vertex items that are immediate downstream vertex items which are represented in the flow state.
-    let enumerateDownstream (state : State<'v>) (v : 'v, i : VertexIndex) : VertexItem<'v> seq =
+    let enumerateDownstream (state : State<'v,'d>) (v : 'v, i : VertexIndex) : VertexItem<'v> seq =
         state.Graph.Structure.OutEdges v
         |> Seq.map (fun e -> 
             let j = 
@@ -93,7 +93,7 @@ module internal TransitionEffects =
             | None -> Seq.empty)
         |> Seq.concat
 
-    let enumerateUpstream (state : State<'v>) (v : 'v, i : VertexIndex) : VertexItem<'v> seq =
+    let enumerateUpstream (state : State<'v,'d>) (v : 'v, i : VertexIndex) : VertexItem<'v> seq =
         let rec minIndex ws j =
             match j with
             | [] -> []
@@ -144,8 +144,8 @@ module internal TransitionEffects =
         | VertexStatus.Paused_MissingOutputOnly _ -> ArtefactStatus.Transient
 
 
-    let getUpstreamArtefactStatus (state : State<'v>) (vi : VertexItem<'v>) : (VertexItem<'v> * ArtefactStatus option) seq =
-        let rec find (j : VertexIndex) (vs : MdMap<int,VertexState>) =
+    let getUpstreamArtefactStatus (state : State<'v,'d>) (vi : VertexItem<'v>) : (VertexItem<'v> * ArtefactStatus option) seq =
+        let rec find (j : VertexIndex) (vs : MdMap<int,VertexState<'d>>) =
             match vs |> MdMap.tryGet j with
             | Some vsj -> vsj.AsScalar().Status |> getArtefactStatus |> Some
             | None -> None
@@ -153,7 +153,7 @@ module internal TransitionEffects =
         enumerateUpstream state vi
         |> Seq.map(fun (w,j) -> (w,j), find j (state.FlowState |> Map.find w)) 
 
-    let rec makeIncomplete (state : StateUpdate<'v>) (v : 'v, i : VertexIndex) reason : StateUpdate<'v> =
+    let rec makeIncomplete (state : StateUpdate<'v,'d>) (v : 'v, i : VertexIndex) reason : StateUpdate<'v,'d> =
         match (v,i) |> tryVertexState state.State with
         | None -> state 
         | Some vs ->
@@ -178,12 +178,12 @@ module internal TransitionEffects =
                 let state2 = update state (v,i) { vs with Status = VertexStatus.Incomplete reason }
                 downstreamIncomplete state2 (v,i) IncompleteReason.OutdatedInputs    
 
-    and downstreamIncomplete (state : StateUpdate<'v>) (v : 'v, i : VertexIndex) reason : StateUpdate<'v> =
+    and downstreamIncomplete (state : StateUpdate<'v,'d>) (v : 'v, i : VertexIndex) reason : StateUpdate<'v,'d> =
         enumerateDownstream state.State (v,i)
         |> Seq.fold (fun s wj -> makeIncomplete s wj reason) state
 
     
-    let allInputsAssigned (state : State<'v>) (v : 'v) = 
+    let allInputsAssigned (state : State<'v,'d>) (v : 'v) = 
         let n = v.Inputs.Length
         let inedges = state.Graph.Structure.InEdges v |> Seq.toList
         let is1dArray (t:System.Type) = t.IsArray && t.GetArrayRank() = 1
@@ -191,7 +191,7 @@ module internal TransitionEffects =
 
     /// When 'vi' succeeds and thus we have its output artefacts, this method updates downstream vertices so their state dimensionality corresponds to the given output.
     /// Precondition: vi is up-to-date.
-    let downstreamShape (state : StateUpdate<'v>) (vi : VertexItem<'v>) : StateUpdate<'v> =
+    let downstreamShape (state : StateUpdate<'v,'d>) (vi : VertexItem<'v>) : StateUpdate<'v,'d> =
         let outdatedItems n item = Seq.init n id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] (item j)) MdMap.empty
 
         let dag = state.State.Graph.Structure
@@ -201,13 +201,13 @@ module internal TransitionEffects =
         let scope, final = Graph.toSeqSubgraphAndFinal (fun u _ _ -> (vertexRank u dag) <= r) dag w 
         let scope = scope |> Graph.topoSort dag
         let state2 =
-            scope |> Seq.fold(fun (state : StateUpdate<'v>) w ->
+            scope |> Seq.fold(fun (state : StateUpdate<'v,'d>) w ->
                 match w |> allInputsAssigned state.State with
                 | false -> // some inputs are unassigned
                     match (w,[]) |> tryVertexState state.State with
                     | Some wis when wis.Status.IsIncompleteReason IncompleteReason.UnassignedInputs -> state
                     | Some wis -> replace state w (MdMap.scalar { wis with Status = Incomplete UnassignedInputs })
-                    | None -> replace state w (MdMap.scalar VertexState.Unassigned)
+                    | None -> replace state w (MdMap.scalar VertexState<'d>.Unassigned)
                 | true -> // all inputs are assigned
                     let getDimLength u (edgeType:ConnectionType) (outRef: OutputRef) : int option =
                         let urank = vertexRank u dag
@@ -242,10 +242,8 @@ module internal TransitionEffects =
                                     | None, None -> None) None
                             let wis = 
                                 match dimLen with
-                                | Some (0,0) -> 
-                                    let shape = List.init w.Outputs.Length (fun _ -> 0)
-                                    VertexState.Final { new IVertexData with member x.Shape = shape } |> MdMap.scalar
-                                | Some (minDim,maxDim) -> outdatedItems maxDim (fun j -> if j < minDim then VertexState.Outdated else VertexState.Unassigned)
+                                | Some (0,0) -> VertexState<'d>.FinalEmpty w.Outputs.Length |> MdMap.scalar
+                                | Some (minDim,maxDim) -> outdatedItems maxDim (fun j -> if j < minDim then VertexState<'d>.Outdated else VertexState<'d>.Unassigned)
                                 | None -> failwith "Unexpected case: the vertex should be downstream of the succeeded vector vertex"
                             replace state w (ws |> MdMap.set i wis)
                         | None -> state // doesn't depend on the target dimension
@@ -254,8 +252,8 @@ module internal TransitionEffects =
         state3
        
 
-    let rec makeStartOrIncomplete (state : StateUpdate<'v>) (vi : VertexItem<'v>) : StateUpdate<'v> =
-        let makeCanStart (state:StateUpdate<'v>) vi =
+    let rec makeStartOrIncomplete (state : StateUpdate<'v,'d>) (vi : VertexItem<'v>) : StateUpdate<'v,'d> =
+        let makeCanStart (state:StateUpdate<'v,'d>) vi =
             let vs = vertexState state.State vi
             match vs.Status with
             | VertexStatus.CanStart _ -> state
@@ -294,7 +292,7 @@ module internal TransitionEffects =
         | _ -> // has unassigned inputs
             makeIncomplete state vi IncompleteReason.UnassignedInputs
 
-    and downstreamStartOrIncomplete (state : StateUpdate<'v>) (vi : VertexItem<'v>) : StateUpdate<'v> = 
+    and downstreamStartOrIncomplete (state : StateUpdate<'v,'d>) (vi : VertexItem<'v>) : StateUpdate<'v,'d> = 
         enumerateDownstream state.State vi
         |> Seq.fold (fun s wj -> 
             match vertexStatus s.State wj with
@@ -302,7 +300,7 @@ module internal TransitionEffects =
             | _ -> makeStartOrIncomplete s wj) state
 
 
-    and downstreamStartOrReproduce (state : StateUpdate<'v>) (vi : VertexItem<'v>) =
+    and downstreamStartOrReproduce (state : StateUpdate<'v,'d>) (vi : VertexItem<'v>) =
         let allInputs wj = 
             getUpstreamArtefactStatus state.State wj
             |> Seq.forall(fun (_, status) -> match status with Some Transient -> false | _ -> true)
@@ -334,13 +332,13 @@ module internal TransitionEffects =
     /// Input: `v` is either Final_* or Paused_*
     /// If the vertex has missing output, it is either going to Reproduces, or Started (with downstream invalidated).
     /// If the vertex also has missing input, the function is called recursively for the input.
-    and upstreamStartOrReproduce (state : StateUpdate<'v>) (vi : VertexItem<'v>) =
+    and upstreamStartOrReproduce (state : StateUpdate<'v,'d>) (vi : VertexItem<'v>) =
         enumerateUpstream state.State vi |> Seq.fold(fun s wj -> makeStartOrReproduce s wj) state
 
     /// Input: `v` is either Final_* or Paused_*
     /// If the vertex has missing output, it is either going to Reproduces, or Started (with downstream invalidated).
     /// If the vertex also has missing input, the function is called recursively for the input.
-    and makeStartOrReproduce (state : StateUpdate<'v>) (vi : VertexItem<'v>) =
+    and makeStartOrReproduce (state : StateUpdate<'v,'d>) (vi : VertexItem<'v>) =
         let vs = vertexState state.State vi
         let apply (status, effect) = applyTransition state vi { vs with Status = status } effect
 
@@ -369,7 +367,7 @@ module internal TransitionEffects =
         | VertexStatus.CanStart _
         | VertexStatus.Started _ -> state // nothing to do, 
 
-    and applyTransition (state : StateUpdate<'v>) (vi : VertexItem<'v>) (targetState : VertexState) (effect : TransitionEffect) =
+    and applyTransition (state : StateUpdate<'v,'d>) (vi : VertexItem<'v>) (targetState : VertexState<'d>) (effect : TransitionEffect) =
         let state2 = update state vi targetState
 
         // State entry action:
@@ -400,12 +398,12 @@ module Normalization =
     open StateOperations
 
     /// Builds an incomplete state for the given vertex depending on states of its input vertices.
-    let internal buildVertexState<'v when 'v:comparison and 'v:>IVertex> (update : StateUpdate<'v>) v =            
+    let internal buildVertexState (update : StateUpdate<'v,'d>) (v : 'v) =            
         let outdatedItems n item = Seq.init n id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] (item j)) MdMap.empty
 
         let edgeState (e:Edge<_>) = 
             let vs = update.State.FlowState.[e.Source]
-            let outdated = MdMap.scalar VertexState.Outdated
+            let outdated = MdMap.scalar VertexState<'d>.Outdated
             match e.Type with 
             | ConnectionType.OneToOne _ | ConnectionType.Collect _ -> vs
             | ConnectionType.Reduce rank -> vs |> MdMap.trim rank (fun _ _ -> outdated) // e.Source has rank `rank+1`; trimming to `rank`
@@ -413,29 +411,29 @@ module Normalization =
                 vs |> MdMap.trim (rank-1) (fun _ m -> // function called for each of vertex state with index of length `rank-1`
                     // m is always scalar since e.Source rank is `rank-1`
                     match m.AsScalar().Data |> Option.map(fun data -> data.Shape.[e.OutputRef]) with
-                    | Some shape -> outdatedItems shape (fun _ -> VertexState.Outdated)
+                    | Some shape -> outdatedItems shape (fun _ -> VertexState<'d>.Outdated)
                     | None -> outdated)
         let vs = 
             match allInputsAssigned update.State v with
-            | false -> MdMap.scalar VertexState.Unassigned
+            | false -> MdMap.scalar VertexState<'d>.Unassigned
             | true ->
                 let inStates = update.State.Graph.Structure.InEdges v |> Seq.map(fun e -> edgeState e) |> Seq.toList
                 match inStates with
-                | [] -> MdMap.scalar VertexState.Outdated
-                | [invs] -> invs |> MdMap.map(fun _ -> VertexState.Outdated) 
-                | _ -> inStates |> Seq.reduce(MdMap.merge (fun _ -> VertexState.Outdated))
+                | [] -> MdMap.scalar VertexState<'d>.Outdated
+                | [invs] -> invs |> MdMap.map(fun _ -> VertexState<'d>.Outdated) 
+                | _ -> inStates |> Seq.reduce(MdMap.merge (fun _ -> VertexState<'d>.Outdated))
         replace update v vs
 
 
 
-    let normalize (state : State<'v>) : StateUpdate<'v> = 
+    let normalize (state : State<'v,'d>) : StateUpdate<'v,'d> = 
         let dag = state.Graph.Structure
         let update = // adding missing vertex states 
-            dag.TopoFold(fun (update : StateUpdate<'v>) v _ -> 
+            dag.TopoFold(fun (update : StateUpdate<'v,'d>) v _ -> 
                 match update.State.FlowState.TryFind v with
                 | Some _ -> update
                 | None -> 
-                    let update2 = add update v (MdMap.scalar VertexState.Unassigned)
+                    let update2 = add update v (MdMap.scalar VertexState<'d>.Unassigned)
                     buildVertexState update2 v
                 ) { State = state; Changes = Map.empty }
         

@@ -20,10 +20,10 @@ module Messages =
           Index: VertexIndex          
           StartTime: TimeIndex }
 
-    type IterationMessage<'v> =
+    type IterationMessage<'v,'d> =
         { Vertex: 'v
           Index: VertexIndex          
-          Result: IVertexData
+          Result: 'd
           StartTime: TimeIndex }
 
     type FailedMessage<'v> =
@@ -36,10 +36,10 @@ module Messages =
         { Vertex: 'v
           Index: VertexIndex }
 
-    type Message<'v when 'v:comparison and 'v:>IVertex> =
+    type Message<'v,'d> =
         | Start         of StartMessage<'v> //* ReplyChannel<bool>
         | Stop          of StopMessage<'v>
-        | Iteration     of IterationMessage<'v>
+        | Iteration     of IterationMessage<'v,'d>
         | Succeeded     of SucceededMessage<'v> // todo: hot/cold final artefacts (incl. distributed case, June/July 2016)
         | Failed        of FailedMessage<'v>
 
@@ -47,7 +47,7 @@ module Messages =
 
     let noChanges = Map.empty
 
-    let transition (m : Message<'v>) (state : State<'v>) : StateUpdate<'v> =
+    let transition (m : Message<'v,'d>) (state : State<'v,'d>) : StateUpdate<'v,'d> =
         let state = { state with TimeIndex = state.TimeIndex  + 1UL }
         
         let vertexState = vertexState state 
@@ -96,21 +96,21 @@ open Messages
 // 3. Add Alter operations.
 // 4. Add cold/hot artefacts, thus enable distributed case (see paper notes for June/July 2016).
 [<Sealed>]
-type StateMachine<'v when 'v:comparison and 'v:>IVertex> private (initialState : State<'v>, source : IObservable<Message<'v>>) =
+type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> private (initialState : State<'v,'d>, source : IObservable<Message<'v,'d>>) =
 
-    let obs = Angara.Observable.ObservableSource<StateUpdate<'v>>()
-    let mutable agent : Angara.MailboxProcessor.ILinearizingAgent<Message<'v>> option = None
+    let obs = Angara.Observable.ObservableSource<StateUpdate<'v,'d>>()
+    let mutable agent : Angara.MailboxProcessor.ILinearizingAgent<Message<'v,'d>> option = None
     let mutable unsubs : System.IDisposable = null
     let mutable lastState = initialState
         
-    let messageHandler (msg:Message<'v>) (state:State<'v>) = 
+    let messageHandler (msg:Message<'v,'d>) (state:State<'v,'d>) = 
         let update(*, reply*) = transition msg state
         lastState <- update.State
         if not (update.Changes.IsEmpty) then obs.Next update
         //reply()
         Angara.MailboxProcessor.AfterMessage.ContinueProcessing state
 
-    let errorHandler (exn:exn) (msg:Message<'v>) state = 
+    let errorHandler (exn:exn) (msg:Message<'v,'d>) state = 
         Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Critical, 1, sprintf "Execution of the agent results in an exception %O at time %d" exn state.TimeIndex)
         Angara.MailboxProcessor.AfterError.ContinueProcessing state
 
@@ -140,5 +140,5 @@ type StateMachine<'v when 'v:comparison and 'v:>IVertex> private (initialState :
             match unsubs with null -> () | d -> d.Dispose()
             agent |> Option.iter(fun d -> d.Dispose())
 
-    static member CreateSuspended (source:System.IObservable<Message<'v>>) (initialState:State<'v>) = 
-        new StateMachine<'v>(initialState, source) 
+    static member CreateSuspended (source:System.IObservable<Message<'v,'d>>) (initialState:State<'v,'d>) = 
+        new StateMachine<'v,'d>(initialState, source) 

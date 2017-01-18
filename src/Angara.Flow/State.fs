@@ -62,34 +62,36 @@ type VertexStatus =
 type IVertexData =
     abstract member Shape : OutputShape
 
-type VertexState = 
+type VertexState<'d when 'd:>IVertexData> = 
     { Status : VertexStatus
-      Data : IVertexData option
+      Data : 'd option
     } with 
     override x.ToString() = sprintf "Vertex is %A" x.Status
-    static member Unassigned : VertexState = 
+    static member Unassigned : VertexState<'d> = 
         { Status = VertexStatus.Incomplete (IncompleteReason.UnassignedInputs); Data = None }
-    static member Outdated : VertexState = 
+    static member Outdated : VertexState<'d> = 
         { Status = VertexStatus.Incomplete (OutdatedInputs); Data = None }
-    static member Final (data: IVertexData) =
+    static member Final (data: 'd) =
         { Status = VertexStatus.Final (data.Shape); Data = Some data }
+    static member FinalEmpty rank : VertexState<'d> =
+        { Status = VertexStatus.Final (List.init rank (fun _ -> 0)); Data = None }
 
-type State<'v when 'v:comparison and 'v:>IVertex> =
+type State<'v,'d when 'v:comparison and 'v:>IVertex and 'd :> IVertexData> =
     { Graph : DataFlowGraph<'v>
-      FlowState : DataFlowState<'v, VertexState> 
+      FlowState : DataFlowState<'v, VertexState<'d>> 
       TimeIndex : TimeIndex }
 
-type VertexChanges = 
-    | New of MdVertexState<VertexState>
+type VertexChanges<'d when 'd:>IVertexData> = 
+    | New of MdVertexState<VertexState<'d>>
     | Removed 
-    | ShapeChanged of old:MdVertexState<VertexState> * current:MdVertexState<VertexState> * isConnectionChanged:bool 
-    | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState> * current:MdVertexState<VertexState> * isConnectionChanged:bool 
+    | ShapeChanged of old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
+    | Modified of indices:Set<VertexIndex> * old:MdVertexState<VertexState<'d>> * current:MdVertexState<VertexState<'d>> * isConnectionChanged:bool 
     
-type Changes<'v when 'v : comparison> = Map<'v, VertexChanges>
+type Changes<'v,'d when 'v : comparison and 'd :> IVertexData> = Map<'v, VertexChanges<'d>>
 
-type StateUpdate<'v when 'v:comparison and 'v:>IVertex> = 
-    { State : State<'v>
-      Changes : Changes<'v> }
+type StateUpdate<'v,'d when 'v:comparison and 'v:>IVertex and 'd :> IVertexData> = 
+    { State : State<'v,'d>
+      Changes : Changes<'v,'d> }
 
 type VertexItem<'v when 'v:comparison and 'v:>IVertex> = 'v * VertexIndex
 
@@ -97,11 +99,11 @@ type VertexItem<'v when 'v:comparison and 'v:>IVertex> = 'v * VertexIndex
 module StateOperations =
     open Angara.Data
 
-    let add (update : StateUpdate<_>) v vs = 
+    let add (update : StateUpdate<_,_>) v vs = 
         { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
           Changes = update.Changes |> Map.add v (VertexChanges.New vs) }
 
-    let update (update : StateUpdate<'v>) (vi : VertexItem<'v>) (vsi : VertexState) =
+    let update (update : StateUpdate<'v,'d>) (vi : VertexItem<'v>) (vsi : VertexState<'d>) =
         let v, i = vi
         let vs = update.State.FlowState |> Map.find v
         let nvs = vs |> MdMap.add i vsi
@@ -116,7 +118,7 @@ module StateOperations =
         { State = { update.State with FlowState = update.State.FlowState |> Map.add v nvs }
           Changes = update.Changes.Add(v, c) }
 
-    let replace (update : StateUpdate<'v>) (v : 'v) (vs : MdMap<int,VertexState>) =
+    let replace (update : StateUpdate<'v,'d>) (v : 'v) (vs : MdMap<int,VertexState<'d>>) =
         let c = 
             match update.Changes |> Map.tryFind v with
             | Some(New _) -> New(vs)

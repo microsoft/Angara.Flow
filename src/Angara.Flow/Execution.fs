@@ -3,10 +3,9 @@
 open System
 open System.Threading
 open Angara.Graph
-open Angara.StateMachine
 open Angara.RuntimeContext
 open Angara.Option
-open Angara.Trace
+open Angara.States
 
 type Artefact = obj
 type MethodCheckpoint = obj
@@ -35,22 +34,20 @@ type Method(inputs: Type list, outputs: Type list) =
     override x.GetHashCode() = 
         failwith "not implemented"
                 
-    abstract ExecuteFrom : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
-    abstract Reproduce: Artefact list * MethodCheckpoint -> Artefact list
+    abstract Execute : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
        
 
 [<Class>] 
-type MethodVertexData (output: Output, checkpoint: MethodCheckpoint option) =
-    interface IVertexData with
-        member x.Contains(outRef) = 
-            match output with
-            | Output.Full art -> outRef < art.Length
-            | Output.Partial art -> outRef < art.Length && art.[outRef].IsSome
+type MethodOutput private (shape: OutputShape, output: Output, checkpoint: MethodCheckpoint option) =
+    
+    static let getShape (a:Artefact) = 
+        match a with
+        | :? Array as a when a.Rank = 1 -> a.Length
+        | _ -> 0
 
-        member x.TryGetShape(outRef) = 
-            x.TryGet outRef |> Option.map (function
-                | :? Array as a when a.Rank = 1 -> a.Length
-                | _ -> 0)
+
+    interface IVertexData with
+        member x.Shape = shape
         
     member x.Output = output
     member x.Checkpoint = checkpoint
@@ -61,7 +58,8 @@ type MethodVertexData (output: Output, checkpoint: MethodCheckpoint option) =
         | Output.Partial art when outRef < art.Length -> art.[outRef]
         | _ -> None
     
-    static member Empty = MethodVertexData(Partial [], None)
+    static member Full(artefacts: Artefact list, checkpoint: MethodCheckpoint option) =
+        MethodOutput(artefacts |> List.map getShape, Output.Full artefacts, checkpoint)
 
  
 type Input = 
@@ -73,7 +71,7 @@ module Artefacts =
     open Angara.Option
     open Angara.Data
     
-    let internal tryGetOutput (edge:Edge<Method>) (i:VertexIndex) (state:DataFlowState<Method,VertexState<MethodVertexData>>) : Artefact option =
+    let internal tryGetOutput (edge:Edge<Method>) (i:VertexIndex) (state:DataFlowState<Method,VertexState<MethodOutput>>) : Artefact option =
         opt {
             let! vs = state |> Map.tryFind edge.Source
             let! vis = vs |> MdMap.tryFind i
@@ -83,7 +81,7 @@ module Artefacts =
 
     /// Sames as getOutput, but "i" has rank one less than rank of the source vertex,
     /// therefore result is an array of artefacts for all available indices complementing "i".
-    let internal tryGetReducedOutput (edge:Edge<_>) (i:VertexIndex) (state:DataFlowState<'v,VertexState<MethodVertexData>>) : Artefact[] option =
+    let internal tryGetReducedOutput (edge:Edge<_>) (i:VertexIndex) (state:DataFlowState<'v,VertexState<MethodOutput>>) : Artefact[] option =
         match state |> Map.tryFind edge.Source with
         | Some svs ->
             let r = i.Length
@@ -103,7 +101,7 @@ module Artefacts =
 
     /// Returns the vertex' output artefact as n-dimensional typed jagged array, where n is a rank of the vertex.
     /// If n is zero, returns the typed object itself.
-    let getMdOutput (v:'v) (outRef: OutputRef) (graph:DataFlowGraph<'v>, state:DataFlowState<'v,VertexState<MethodVertexData>>) = 
+    let getMdOutput (v:'v) (outRef: OutputRef) (graph:DataFlowGraph<'v>, state:DataFlowState<'v,VertexState<MethodOutput>>) = 
         let vector = state |> Map.find v |> MdMap.map (fun vis -> vis.Data.Value.Output.TryGet(outRef).Value)
         let rank = vertexRank v graph.Structure
         if rank = 0 then 
@@ -195,17 +193,17 @@ module Artefacts =
 //
 //////////////////////////////////////////////
 
-type internal RuntimeAction<'v> =
+type RuntimeAction<'v> =
     | Delay     of 'v * VertexIndex * TimeIndex
     | Execute   of 'v * VertexIndex * TimeIndex 
-    | Reproduce of 'v * VertexIndex * TimeIndex 
+    | Continue  of 'v * VertexIndex * TimeIndex 
     | StopMethod of 'v * VertexIndex * TimeIndex
     | Remove    of 'v
 
 module Analysis =
     /// Analyzes state machine changes and provides a list of action to be performed by an execution runtime.
     /// All methods are executed when have status "CanStart".
-    let internal analyzeChanges (state: State<'v,'d>, changes: Changes<'v,'d>) : RuntimeAction<'v> list =
+    let internal analyzeChanges (stateUpdate: StateUpdate<'v,'d>) : RuntimeAction<'v> list =
         failwith ""
     //            let processItemChange (v: 'v, i:VertexIndex) (oldvis: (VertexItemState) option) (vis: VertexItemState) : RuntimeAction option =
     //                let oldStatus = 
@@ -271,6 +269,8 @@ open Angara
 open Angara.Observable
 open System.Collections.Generic
 open System.Threading.Tasks.Schedulers
+open Angara.States.Messages
+open Angara.Trace
 
 type internal Progress<'v>(v:'v, i:VertexIndex, progressReported : ObservableSource<'v*VertexIndex*float>) =
     interface IProgress<float> with
@@ -301,8 +301,8 @@ and [<Class>] ThreadPoolScheduler() =
             raise ex
 
 [<Sealed>]
-type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction<Method> list>, scheduler : Scheduler) =
-    let messages = ObservableSource<Message<Method, MethodVertexData>>()
+type Runtime (source:IObservable<State<Method,MethodOutput> * RuntimeAction<Method> list>, scheduler : Scheduler) =
+    let messages = ObservableSource<Message<Method,MethodOutput>>()
     let cancels = Dictionary<Method*VertexIndex,CancellationTokenSource>()
     let progressReported = ObservableSource<Method*VertexIndex*float>()
 
@@ -325,7 +325,7 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
         let delayMs = 0                    
         let run() = 
             Trace.Runtime.TraceEvent(Trace.Event.Verbose, 0, sprintf "Starting %O.%A at %d" v i time)
-            messages.Next(Message.Start ({ Vertex = v; Index = Some i; CanStartTime = Some time }, ignore))
+            messages.Next(Message.Start ({ Vertex = v; Index = i; CanStartTime = Some time }))
         if delayMs > 0 then
             let cts = new CancellationTokenSource()
             cancels.Add((v,i), cts)
@@ -337,11 +337,11 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
         else run()
        
     let postIterationSucceeded v index time result =
-        Message.Succeeded { Vertex = v; Index = index; StartTime = time; Result = SucceededResult.IterationResult result }
+        Message.Iteration { Vertex = v; Index = index; StartTime = time; Result = result }
         |> messages.Next
         
     let postNoMoreIterations v index time = 
-        Message.Succeeded { Vertex = v; Index = index; StartTime = time; Result = SucceededResult.NoMoreIterations }
+        Message.Succeeded { Vertex = v; Index = index; StartTime = time }
         |> messages.Next
 
     let postFailure v index time exn = 
@@ -361,7 +361,7 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
             | NotAvailable -> failwith "Input artefacts for the method to execute are not available"
         Seq.zip inputs inpTypes |> Seq.map restore |> List.ofSeq
 
-    let buildEvaluation (v:Method,index,time,state:State<Method,MethodVertexData>) (cts:CancellationTokenSource) = fun() ->
+    let buildEvaluation (v:Method,index,time,state:State<Method,MethodOutput>) (cts:CancellationTokenSource) (doContinue:bool) = fun() ->
         Trace.Runtime.TraceEvent(Event.Start, RuntimeId.Evaluation, sprintf "Starting evaluation of %O.[%A]" v index)
                 
         let cancellationToken = cts.Token
@@ -372,16 +372,17 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
         let inputs = (v, index) |> Artefacts.getInputs (state.FlowState, state.Graph)
         try
             let checkpoint =
-                opt {
-                    let! vis = state.FlowState |> DataFlowState.tryGet (v,index)
-                    let! data = vis.Data
-                    return! data.Checkpoint
-                } 
+                if doContinue then
+                    opt {
+                        let! vis = state.FlowState |> DataFlowState.tryGet (v,index)
+                        let! data = vis.Data
+                        return! data.Checkpoint
+                    } 
+                else None
             let inArtefacts = inputs |> convertArrays (v:>IVertex).Inputs
-
-            v.ExecuteFrom(inArtefacts, checkpoint)
+            v.Execute(inArtefacts, checkpoint)
             |> Seq.takeWhile (fun _ -> not cancellationToken.IsCancellationRequested)
-            |> Seq.iteri (fun i (output,chk) -> MethodVertexData(Output.Full output, Some chk) |> postIterationSucceeded v index time)
+            |> Seq.iteri (fun i (output,chk) -> MethodOutput.Full(output, Some chk) |> postIterationSucceeded v index time)
                 
             if not cancellationToken.IsCancellationRequested then 
                 postNoMoreIterations v index time
@@ -391,34 +392,8 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
             Trace.Runtime.TraceEvent(Event.Error, RuntimeId.Evaluation, sprintf "FAILED execution of %O.[%A]" v index)
             ex |> postFailure v index time
 
-    let buildReproduce (v:Method,index,time,state:State<Method,MethodVertexData>) = fun() ->
-        Trace.Runtime.TraceEvent(Event.Start, RuntimeId.Evaluation, sprintf "Reproducing of %O.[%A]" v index)
-                
-        let cancellationToken = cts.Token
-        RuntimeContext.replaceContext // todo: move to the scheduler
-            { Token = cancellationToken
-              ProgressReporter = progress v index } |> ignore
 
-        let inputs = (v, index) |> Artefacts.getInputs (state.FlowState, state.Graph)
-        try
-            let checkpoint =
-                opt {
-                    let! vis = state.FlowState |> DataFlowState.tryGet (v,index)
-                    let! data = vis.Data
-                    return! data.Checkpoint
-                } 
-            let inArtefacts = inputs |> convertArrays (v:>IVertex).Inputs
-
-            let outArtefacts = v.Reproduce(inArtefacts, checkpoint)
-            MethodVertexData(Output.Full outArtefacts, checkpoint)
-            |> postIterationSucceeded v index time             
-
-            Trace.Runtime.TraceEvent(Event.Stop, RuntimeId.Evaluation, sprintf "SUCCEEDED reproducing of %O.[%A]" v index)
-        with ex -> 
-            Trace.Runtime.TraceEvent(Event.Error, RuntimeId.Evaluation, sprintf "FAILED reproducing of %O.[%A]" v index)
-            ex |> postFailure v index time
-
-    let performAction (state : State<Method,MethodVertexData>) (action : RuntimeAction<Method>) = 
+    let performAction (state : State<Method,MethodOutput>) (action : RuntimeAction<Method>) = 
         match action with
         | Delay (v,slice,time) -> 
             cancel (v,slice) cancels
@@ -429,13 +404,17 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
 
         | Execute (v,slice,time) -> 
             let cts = new CancellationTokenSource()
-            let func = buildEvaluation (v,slice,time,state) cts 
+            let func = buildEvaluation (v,slice,time,state) cts false
             scheduler.Start func
             cancel (v,slice) cancels
             cancels.Add((v,slice), cts)
 
-        | Reproduce (v,slice,time) -> failwith ""
-            
+        | Continue (v,slice,time) -> 
+            let cts = new CancellationTokenSource()
+            let func = buildEvaluation (v,slice,time,state) cts true
+            scheduler.Start func
+            cancel (v,slice) cancels
+            cancels.Add((v,slice), cts)
 
         | Remove v -> 
             cancelAll v cancels
@@ -465,6 +444,8 @@ type Runtime (source:IObservable<State<Method, MethodVertexData> * RuntimeAction
 
 
 module internal Helpers = 
+    open Angara.States.Messages
+
     let internal asAsync (create: ReplyChannel<_> -> Message<_,_>) (source:ObservableSource<_>) : Async<Response<_>> = 
         Async.FromContinuations(fun (ok, _, _) -> create ok |> source.Next)
 
@@ -477,17 +458,17 @@ module internal Helpers =
 open Helpers
 
 [<Class>]
-type Engine(graph:DataFlowGraph<Method>, state:DataFlowState<Method,VertexState<MethodVertexData>>, scheduler:Scheduler) =
+type Engine(initialState : State<Method, MethodOutput>, scheduler:Scheduler) =
     
     let messages = ObservableSource()
 
-    let matchOutput (a:MethodVertexData) (b:MethodVertexData) (outRef:OutputRef) = 
+    let matchOutput (a:MethodOutput) (b:MethodOutput) (outRef:OutputRef) = 
         match a.TryGet outRef, b.TryGet outRef with
         | Some artA, Some artB -> LanguagePrimitives.GenericEqualityComparer.Equals(a,b)
         | _ -> false
             
-    let stateMachine = Angara.StateMachine.CreateSuspended messages.AsObservable matchOutput (graph, state)
-    let runtimeActions = stateMachine.Changes |> Observable.map (fun (s,c) -> s, Analysis.analyzeChanges (s,c))
+    let stateMachine = Angara.States.StateMachine.CreateSuspended messages.AsObservable initialState
+    let runtimeActions = stateMachine.Changes |> Observable.map (fun update -> update.State, Analysis.analyzeChanges update)
     let runtime = new Runtime(runtimeActions, scheduler)
 
     let mutable sbs = null
@@ -501,8 +482,6 @@ type Engine(graph:DataFlowGraph<Method>, state:DataFlowState<Method,VertexState<
 
     member x.Start() = stateMachine.Start()
 
-    member x.AlterAsync alter =
-        asAsync (fun reply -> Alter(alter, reply)) messages |> unwrap
 
     interface IDisposable with
         member x.Dispose() = 

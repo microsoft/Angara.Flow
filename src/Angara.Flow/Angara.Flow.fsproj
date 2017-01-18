@@ -59,8 +59,8 @@
     <Compile Include="StateTransitions.fs" />
     <Compile Include="StateMachine.fsi" />
     <Compile Include="StateMachine.fs" />
-    <None Include="Execution.fsi" />
-    <None Include="Execution.fs" />
+    <Compile Include="Execution.fsi" />
+    <Compile Include="Execution.fs" />
     <None Include="Flow.fsi" />
     <None Include="Flow.fs" />
     <None Include="Methods.fsi" />
