@@ -73,6 +73,7 @@
     <Compile Include="StateOperations.fs" />
     <Compile Include="StateTransitionsSpecs.fs" />
     <Compile Include="StateOperationsTests.fs" />
+    <Compile Include="EngineTests.fs" />
     <None Include="Script.fsx" />
     <None Include="paket.references" />
     <None Include="App.config" />

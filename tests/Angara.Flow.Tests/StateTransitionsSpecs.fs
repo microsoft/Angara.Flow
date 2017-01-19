@@ -1,4 +1,4 @@
-﻿module StateMachineMockupTests
+﻿module ``State machine specs``
 
 
 open NUnit.Framework

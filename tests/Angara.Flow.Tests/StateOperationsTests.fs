@@ -1,4 +1,4 @@
-﻿module StateMachineTests
+﻿module ``State operations``
 
 open FsUnit
 open NUnit.Framework

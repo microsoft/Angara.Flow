@@ -9,6 +9,8 @@ open Angara.States
 
 type Artefact = obj
 type MethodCheckpoint = obj
+type MethodId = Guid
+
 type Output = 
     | Full    of Artefact list
     | Partial of (Artefact option) list
@@ -18,21 +20,27 @@ type Output =
         | Partial artefacts -> if outRef < artefacts.Length then artefacts.[outRef] else None
 
 [<AbstractClass>]
-type Method(inputs: Type list, outputs: Type list) =
+type Method(id: MethodId, inputs: Type list, outputs: Type list) =
 
     interface IVertex with
         member x.Inputs = inputs
         member x.Outputs = outputs
     
     interface IComparable with
-        member x.CompareTo(obj: obj): int = 
-            failwith "Not implemented yet"
+        member x.CompareTo(yobj: obj): int = 
+            match yobj with
+            | :? Method as y -> id.CompareTo y.Id
+            | _ -> invalidArg "yobj" "Cannot compare values of different types"
 
-    override x.Equals(obj: obj) = 
-        failwith "not implemented"
+    member x.Id = id
+
+    override x.Equals(yobj: obj) = 
+        match yobj with
+        | :? Method as y -> x.Id = y.Id
+        | _ -> false
 
     override x.GetHashCode() = 
-        failwith "not implemented"
+        id.GetHashCode()
                 
     abstract Execute : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
        

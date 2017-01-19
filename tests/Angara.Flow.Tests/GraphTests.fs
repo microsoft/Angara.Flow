@@ -1,4 +1,4 @@
-﻿module GraphTests
+﻿module ``Directed Acyclic Graph operations``
 
 open FsUnit
 open NUnit.Framework

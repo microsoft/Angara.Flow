@@ -13,13 +13,17 @@ type Artefact = obj
 /// Actual type of the checkpoint depends on the Method; a Method may not use the checkpoints and return `null`.
 type MethodCheckpoint = obj
 
+type MethodId = Guid
+
 /// A graph vertex which can be executed.
 [<AbstractClass>]
 type Method =
-    new : Type list * Type list -> Method
+    new : MethodId * Type list * Type list -> Method
 
     interface IVertex
-    interface IComparable // todo: how to compare methods?
+    interface IComparable 
+
+    member Id : MethodId
 
     /// Applies the method to the given input artefacts.
     /// Returns a sequence of checkpoints; for each checkpoint there are output artefacts and the corresponding checkpoint,
@@ -31,6 +35,7 @@ type Method =
     /// - return an empty sequence;
     /// - return checkpoint value that doesn't allow to reproduce the corresponding artefacts deterministically.
     abstract Execute : Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq
+
 
 /// Represents output artefacts of a method.
 /// An artefact can be missing, e.g. if the dataflow snapshot couldn't be restored completely.
