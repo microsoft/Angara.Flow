@@ -32,7 +32,7 @@ type Data =
 
 [<Test; Category("CI")>]
 [<Timeout(1000)>]
-let ``Normalize adds a proper status when it is missing``() =
+let ``State normalization adds a proper status when it is missing for a vertex``() =
     let v1 = Vertex(1, [], [typeof<int>])
     let v2 = Vertex(2, [typeof<int>], [typeof<int>])
     let g1 = DataFlowGraph<Vertex>().Add(v1).Add(v2).Connect (v2,0) (v1,0)

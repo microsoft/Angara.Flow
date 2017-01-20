@@ -108,7 +108,7 @@ type StateMachine<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> 
         lastState <- update.State
         if not (update.Changes.IsEmpty) then obs.Next update
         //reply()
-        Angara.MailboxProcessor.AfterMessage.ContinueProcessing state
+        Angara.MailboxProcessor.AfterMessage.ContinueProcessing update.State
 
     let errorHandler (exn:exn) (msg:Message<'v,'d>) state = 
         Trace.StateMachine.TraceEvent(System.Diagnostics.TraceEventType.Critical, 1, sprintf "Execution of the agent results in an exception %O at time %d" exn state.TimeIndex)

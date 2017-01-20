@@ -5,6 +5,8 @@ open NUnit.Framework
 open Angara.Graph
 open Angara.States
 open Angara.Execution
+open System.Diagnostics
+open System.Threading
 
 
 type Dag = DirectedAcyclicGraph<Method, Edge<Method>>
@@ -18,14 +20,14 @@ type MethodMakeValue<'a>(value: 'a) =
 
 
 [<Test; Category("CI")>]
-let ``Engine normalizes given initial state when the engine is started`` () =
+let ``Engine executes a flow containing a single method`` () =
     let methodOne : Method = upcast MethodMakeValue System.Math.PI
     let flowGraph = DataFlowGraph(Dag([methodOne, []] |> Map.ofList))
 
     // The initial state has no value for the method. 
     // It must be built automatically by the engine when it is started.
     // Automatic initial state of the method will be CanStart.
-    let flowState = DataFlowState([methodOne, MdVertexState.Empty])
+    let flowState = DataFlowState([])
 
     let state = 
         { TimeIndex = 0UL
@@ -33,11 +35,18 @@ let ``Engine normalizes given initial state when the engine is started`` () =
           FlowState = flowState          
         }
     use engine = new Engine(state, Scheduler.ThreadPool())
-    engine.Changes.Add(printfn "%A")
-    engine.Start()
     
+    let ev = new AutoResetEvent(false)
+    engine.Changes.Add(fun update -> 
+        match update.State.FlowState |> Map.forall(fun _ vs -> vs.AsScalar().Status.IsUpToDate) with
+        | true -> ev.Set() |> ignore
+        | false -> ())
+    
+    engine.Start()
 
+    ev.WaitOne() |> ignore
+
+
+[<Test; Category("CI")>]
+let ``Engine normalizes given initial state when the engine is started`` () =
     Assert.Inconclusive("Test is incomplete")
-
-
-

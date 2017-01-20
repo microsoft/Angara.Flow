@@ -209,63 +209,63 @@ type RuntimeAction<'v> =
     | Remove    of 'v
 
 module Analysis =
+    open Angara
+    open Angara.Data
+
     /// Analyzes state machine changes and provides a list of action to be performed by an execution runtime.
-    /// All methods are executed when have status "CanStart".
-    let internal analyzeChanges (stateUpdate: StateUpdate<'v,'d>) : RuntimeAction<'v> list =
-        failwith ""
-    //            let processItemChange (v: 'v, i:VertexIndex) (oldvis: (VertexItemState) option) (vis: VertexItemState) : RuntimeAction option =
-    //                let oldStatus = 
-    //                    match oldvis with
-    //                    | Some oldvis -> oldvis.Status
-    //                    | None -> Incomplete IncompleteReason.UnassignedInputs
-    //
-    //                match oldStatus, vis.Status with
-    //                | CanStart t1, CanStart t2 when t1 <> t2 -> Delay (v,i,t2) |> Some
-    //
-    //                | _, CanStart t ->                          Delay (v,i,t) |> Some
-    //            
-    //                | CanStart _, Started t ->                  Execute (v,i,t,None) |> Some
-    //
-    //                | CompleteStarted (k0,_,t1), CompleteStarted (k1,_,t2) when k0=k1 && t1=t2 -> None
-    //            
-    //                | _, CompleteStarted (k,_,t) -> // executes the transient method and sends "Succeeded"/"Failed" when it finishes
-    //                    if k.IsSome then failwith "Transient iterative methods are not supported" 
-    //                    Execute (v,i,t,None) |> Some
-    //
-    //                | Complete (Some(_),_), Continues (k,_,t) -> // resumes an iterative method
-    //                    let initial = match k with 0 -> None | _ -> Some(k, vis |> output |> Array.ofList)
-    //                    Execute (v,i,t,initial) |> Some
-    //
-    //                | Continues (_,_,t), Complete _     // stops iterations
-    //                | Started t, Incomplete (IncompleteReason.Stopped) -> StopMethod (v,i,t) |> Some
-    //
-    //                | _,_ -> None
-    //
-    //            let processChange (v : 'v) (change : VertexChanges) : RuntimeAction list =             
-    //                Trace.Runtime.TraceEvent(Trace.Event.Verbose, 0, "Processing change of " + v.ToString() + ": " + (change.ToString()))
-    //
-    //                match change with
-    //                | Removed -> [ Remove v ]
-    //
-    //                | New vs -> 
-    //                    vs.ToSeq() |> Seq.choose(fun (i, vis) ->
-    //                        match vis.Status with
-    //                        | CanStart time -> Delay(v,i,time) |> Some
-    //                        | Started startTime -> Execute (v,i,startTime,None) |> Some
-    //                        | _ -> None) |> Seq.toList
-    //
-    //                | Modified (indices,oldvs,newvs,_) ->
-    //                    indices |> Set.toSeq |> Seq.choose(fun i -> 
-    //                        let vis = newvs.TryGetItem i |> Option.get
-    //                        let oldVis = oldvs.TryGetItem i 
-    //                        processItemChange (v,i) oldVis vis) |> Seq.toList
-    //
-    //                | ShapeChanged(oldvs, newvs, isConnectionChanged) ->
-    //                    let oldVis i = oldvs.TryGetItem i 
-    //                    newvs.ToSeq() |> Seq.choose(fun (i,vis) ->                    
-    //                        processItemChange (v,i) (oldVis i) vis) |> Seq.toList
-    //            
-    //            changes |> Map.fold(fun actions v vc -> (processChange v vc) @ actions) []
+    /// All methods are executed when have status "CanStart" or "Reproduces".
+    let internal analyzeChanges (update: StateUpdate<'v,'d>) : RuntimeAction<'v> list =
+        let processItemChange (v: 'v, i:VertexIndex) (oldvis: VertexState<'d> option) (vis: VertexState<'d>) : RuntimeAction<'v> option =
+            let oldStatus = 
+                match oldvis with
+                | Some oldvis -> oldvis.Status
+                | None -> Incomplete IncompleteReason.UnassignedInputs
+    
+            match oldStatus, vis.Status with
+            // -- Delay
+            | CanStart t1, CanStart t2 when t1 <> t2 -> Delay (v,i,t2) |> Some
+            | _, CanStart t -> Delay (v,i,t) |> Some
+                
+            // -- Execute from beginning
+            | CanStart _, Started t
+            | _, Reproduces (t,_) 
+            | Paused_MissingOutputOnly _, Started t -> Execute (v,i,t) |> Some
+    
+            // -- Continue from checkpoint
+            | Paused _, Continues (t,_) -> Continue (v,i,t) |> Some
+                
+            // -- Stop execution
+            | Continues (t,_), Paused _     // stops iterations
+            | Started t, Incomplete (IncompleteReason.Stopped) -> StopMethod (v,i,t) |> Some
+    
+            //| CompleteStarted (k0,_,t1), CompleteStarted (k1,_,t2) when k0=k1 && t1=t2 -> None
+            | _,_ -> None
+    
+        let processChange (v : 'v) (change : VertexChanges<'d>) : RuntimeAction<'v> list =             
+            Trace.Runtime.TraceEvent(Trace.Event.Verbose, 0, "Processing change of " + v.ToString() + ": " + (change.ToString()))
+    
+            match change with
+            | Removed -> [ Remove v ]
+    
+            | New vs -> 
+                vs |> MdMap.toSeq |> Seq.choose(fun (i, vis) ->
+                    match vis.Status with
+                    | CanStart time -> Delay(v,i,time) |> Some
+                    | Started startTime -> Execute (v,i,startTime) |> Some
+                    | _ -> None) |> Seq.toList
+    
+            | Modified (indices,oldvs,newvs,_) ->
+                indices |> Set.toSeq |> Seq.choose(fun i -> 
+                    let vis = newvs |> MdMap.tryFind i |> Option.get
+                    let oldVis = oldvs |> MdMap.tryFind i  
+                    processItemChange (v,i) oldVis vis) |> Seq.toList
+    
+            | ShapeChanged(oldvs, newvs, isConnectionChanged) ->
+                let oldVis i = oldvs |> MdMap.tryFind i 
+                newvs |> MdMap.toSeq |> Seq.choose(fun (i,vis) ->                    
+                    processItemChange (v,i) (oldVis i) vis) |> Seq.toList
+                
+        update.Changes |> Map.fold(fun actions v vc -> (processChange v vc) @ actions) []
 
 //////////////////////////////////////////////
 // 
