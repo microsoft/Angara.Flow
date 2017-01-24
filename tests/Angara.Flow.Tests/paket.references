@@ -1,4 +1,6 @@
-﻿group Test
+﻿System.Reactive
+
+group Test
 NUnit
 NUnit.Runners
 FsCheck

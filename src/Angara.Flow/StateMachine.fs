@@ -68,7 +68,7 @@ module Messages =
             | Iteration it -> 
                 let v = it.Vertex,it.Index
                 let vs = vertexState v                   
-                v, iteration it.StartTime it.Result.Shape vs.Status |> changeStatus vs
+                v, iteration it.StartTime it.Result vs
 
             | Succeeded succ -> 
                 let v = succ.Vertex,succ.Index

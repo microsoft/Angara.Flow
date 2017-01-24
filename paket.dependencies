@@ -1,5 +1,6 @@
 source https://nuget.org/api/v2
 
+nuget System.Reactive
 nuget MSFT.ParallelExtensionsExtras
 
 group Test

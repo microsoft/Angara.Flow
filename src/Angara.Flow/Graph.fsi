@@ -77,7 +77,7 @@ val isReachableFrom : target:'v -> source:'v -> g:DirectedAcyclicGraph<'v,'e> ->
 
 /////////////////////////////////////////////////////
 //
-// More specific DataFlowGraph. 
+// More specific FlowGraph. 
 //
 // A Vertex may have multiple inputs and outputs.
 // An edge connects certain output with certain input.
@@ -126,27 +126,32 @@ type Edge<'v> =
 val edgeRank : e:Edge<'a> -> int
 val vertexRank : v:'v -> graph:DirectedAcyclicGraph<'v,Edge<'v>> -> int when 'v : comparison
 
-type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> =
-    new : unit -> DataFlowGraph<'v>
-    new : graph:DirectedAcyclicGraph<'v,Edge<'v>> -> DataFlowGraph<'v>
+type FlowGraph<'v when 'v : comparison and 'v :> IVertex> =
+    new : unit -> FlowGraph<'v>
+    new : graph:DirectedAcyclicGraph<'v,Edge<'v>> -> FlowGraph<'v>
 
     member Structure : DirectedAcyclicGraph<'v,Edge<'v>>
     
-    member Add : vertex:'v -> DataFlowGraph<'v>
+    member Add : vertex:'v -> FlowGraph<'v>
     member BatchAlter : batchDisconnect:('v * InputRef * 'v * OutputRef) list ->
                         batchConnect:('v * InputRef * 'v * OutputRef) list ->
-                        DataFlowGraph<'v>
-    member Connect : vTrg:'v * pTrg:InputRef -> vSrc:'v * pSrc:OutputRef -> DataFlowGraph<'v>
-    member ConnectItem : vTrg:'v * pTrg:InputRef -> vSrc:'v * pSrc:OutputRef -> DataFlowGraph<'v>
-    member Disconnect : target:'v * inpRef:InputRef -> DataFlowGraph<'v>
+                        FlowGraph<'v>
+    member Connect : vTrg:'v * pTrg:InputRef -> vSrc:'v * pSrc:OutputRef -> FlowGraph<'v>
+    member ConnectItem : vTrg:'v * pTrg:InputRef -> vSrc:'v * pSrc:OutputRef -> FlowGraph<'v>
+    member Disconnect : target:'v * inpRef:InputRef -> FlowGraph<'v>
     member Disconnect : target:'v * inpRef:InputRef * source:'v *
-                    outputRef:OutputRef -> DataFlowGraph<'v>
-    member TryRemove : v:'v -> DataFlowGraph<'v> option
+                    outputRef:OutputRef -> FlowGraph<'v>
+    member TryRemove : v:'v -> FlowGraph<'v> option
 
     static member CreateFrom : methods:(int * 'v) list ->
                         connections:((int * OutputRef) * (int * InputRef)) list ->
-                        DataFlowGraph<'v> * Map<int,'v>
-    static member Empty : DataFlowGraph<'v>
+                        FlowGraph<'v> * Map<int,'v>
+    static member Empty : FlowGraph<'v>
+
+module FlowGraph =
+    val empty : unit -> FlowGraph<'v>
+    val add : 'v -> FlowGraph<'v> -> FlowGraph<'v>
+    val connect : 'v * InputRef -> 'v * OutputRef -> FlowGraph<'v> -> FlowGraph<'v>
 
 
 //------------ State of an Angara flow.
@@ -158,11 +163,11 @@ type MdVertexState<'vs> = Angara.Data.MdMap<int, 'vs>
 /// A key in the multidimensional vertex state.
 type VertexIndex = int list
 
-/// DataFlowState compliments the dependency graph
+/// VerticesState compliments the dependency graph
 /// to keep track of results of execution of the graph methods.
 /// The state contains both status information and methods outputs.
-type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> =
+type VerticesState<'v, 'vs when 'v : comparison and 'v :> IVertex> =
     Map<'v, MdVertexState<'vs>>
 
 module DataFlowState =
-    val tryGet : 'v * VertexIndex -> DataFlowState<'v,'vs> -> 'vs option
+    val tryGet : 'v * VertexIndex -> VerticesState<'v,'vs> -> 'vs option

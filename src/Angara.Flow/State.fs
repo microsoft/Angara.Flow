@@ -77,8 +77,8 @@ type VertexState<'d when 'd:>IVertexData> =
         { Status = VertexStatus.Final (List.init rank (fun _ -> 0)); Data = None }
 
 type State<'v,'d when 'v:comparison and 'v:>IVertex and 'd :> IVertexData> =
-    { Graph : DataFlowGraph<'v>
-      FlowState : DataFlowState<'v, VertexState<'d>> 
+    { Graph : FlowGraph<'v>
+      Vertices : VerticesState<'v, VertexState<'d>> 
       TimeIndex : TimeIndex }
 
 type VertexChanges<'d when 'd:>IVertexData> = 
@@ -100,12 +100,12 @@ module StateOperations =
     open Angara.Data
 
     let add (update : StateUpdate<_,_>) v vs = 
-        { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
+        { State = { update.State with Vertices = update.State.Vertices |> Map.add v vs }
           Changes = update.Changes |> Map.add v (VertexChanges.New vs) }
 
     let update (update : StateUpdate<'v,'d>) (vi : VertexItem<'v>) (vsi : VertexState<'d>) =
         let v, i = vi
-        let vs = update.State.FlowState |> Map.find v
+        let vs = update.State.Vertices |> Map.find v
         let nvs = vs |> MdMap.add i vsi
         let c = 
             match update.Changes |> Map.tryFind v with
@@ -115,7 +115,7 @@ module StateOperations =
             | Some(Removed) -> failwith "Removed vertex cannot be modified"
             | None -> Modified(Set.empty |> Set.add i, vs, nvs, false) 
 
-        { State = { update.State with FlowState = update.State.FlowState |> Map.add v nvs }
+        { State = { update.State with Vertices = update.State.Vertices |> Map.add v nvs }
           Changes = update.Changes.Add(v, c) }
 
     let replace (update : StateUpdate<'v,'d>) (v : 'v) (vs : MdMap<int,VertexState<'d>>) =
@@ -125,8 +125,8 @@ module StateOperations =
             | Some(ShapeChanged(oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
             | Some(Modified(_,oldvs,_,connChanged)) -> ShapeChanged(oldvs,vs,connChanged)
             | Some(Removed) -> failwith "Removed vertex cannot be modified"
-            | None -> ShapeChanged(update.State.FlowState.[v],vs,false)
+            | None -> ShapeChanged(update.State.Vertices.[v],vs,false)
 
-        { State = { update.State with FlowState = update.State.FlowState |> Map.add v vs }
+        { State = { update.State with Vertices = update.State.Vertices |> Map.add v vs }
           Changes = update.Changes.Add(v, c) }
 

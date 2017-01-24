@@ -55,7 +55,7 @@ let reduce_node1 name inNode =
     { Nodes = [node; inNode]; Target = Some node}
 
 
-type internal Dag = Angara.Graph.DataFlowGraph<Vertex>
+type internal Dag = Angara.Graph.FlowGraph<Vertex>
 
 let rec internal buildType rank =
     if rank = 0 then typeof<int>

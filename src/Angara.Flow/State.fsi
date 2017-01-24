@@ -94,8 +94,8 @@ type VertexState<'d when 'd:>IVertexData> =
 
 /// An immutable type which keeps state for the StateMachine.
 type State<'v,'d when 'v:comparison and 'v:>IVertex and 'd:>IVertexData> =
-    { Graph : DataFlowGraph<'v>
-      FlowState : DataFlowState<'v, VertexState<'d>> 
+    { Graph : FlowGraph<'v>
+      Vertices : VerticesState<'v, VertexState<'d>> 
       TimeIndex : TimeIndex }
 
 

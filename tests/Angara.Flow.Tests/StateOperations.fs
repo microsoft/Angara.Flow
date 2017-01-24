@@ -10,7 +10,7 @@ type VertexOutput(shape:OutputShape) =
     interface IVertexData with
         member x.Shape = shape
 
-let internal exprToGraph = System.Collections.Generic.Dictionary<Graph, Angara.Graph.DataFlowGraph<Vertex> * Map<string, Vertex>>()
+let internal exprToGraph = System.Collections.Generic.Dictionary<Graph, Angara.Graph.FlowGraph<Vertex> * Map<string, Vertex>>()
 
 let vector (statuses : VertexStatus list) =
     statuses |> Seq.mapi(fun i v -> i,v) |> Seq.fold (fun map (i,v) -> MdMap.add [i] v map) MdMap.empty
@@ -32,7 +32,7 @@ let mdState (graphExpr:Graph, statuses:(string* MdMap<int,VertexStatus>) list, t
         |> List.fold(fun map (nodeName, status) -> 
             let status2 = status |> MdMap.map(fun st -> { Status = st; Data = None })
             map.Add(nameToVertex.[nodeName], status2)) Map.empty
-    { Graph = flowGraph; FlowState = flowState; TimeIndex = timeIndex }, nameToVertex
+    { Graph = flowGraph; Vertices = flowState; TimeIndex = timeIndex }, nameToVertex
 
 
 let state (graphExpr:Graph, statuses:(string*VertexStatus) list, timeIndex : TimeIndex) =
@@ -72,8 +72,8 @@ let check (stateExp : State<Vertex,VertexOutput>, nameToVertexExp: Map<string, V
     Assert.AreEqual(nameToVertexExp, nameToVertexAct, sprintf "Different names (%d)" stateExp.TimeIndex)
     Assert.AreEqual(stateExp.Graph, stateAct.Graph, sprintf "Different graphs (%d)" stateExp.TimeIndex)
     
-    let exp = stateExp.FlowState |> Map.toArray
-    let act = stateAct.FlowState |> Map.toArray
+    let exp = stateExp.Vertices |> Map.toArray
+    let act = stateAct.Vertices |> Map.toArray
     Assert.AreEqual(exp.Length, act.Length, sprintf "Different length of states (%d)" stateExp.TimeIndex)
     Array.iter2(fun (v,e) (u,a) -> 
         Assert.AreEqual(v :> obj, u :> obj, sprintf "Different vertices of states (%d)" stateExp.TimeIndex)

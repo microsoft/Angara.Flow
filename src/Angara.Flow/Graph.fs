@@ -326,7 +326,7 @@ let vertexRank (v:'v) (graph:Dag<'v>) : int =
 
 /// Represents a graph of methods where edge is a data dependency between two methods.
 /// (Level 2)
-type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
+type FlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
 
     static let isAssignableFrom (tSrc:System.Type) (tTrg:System.Type) = tTrg.IsAssignableFrom(tSrc)
     
@@ -486,11 +486,11 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
             | _ -> graph
         graph.RemoveEdge(remove)
                     
-    new() = DataFlowGraph(Dag())
+    new() = FlowGraph(Dag())
 
     member this.Structure with get() = graph
 
-    member this.Add vertex = DataFlowGraph(graph.AddVertex vertex)
+    member this.Add vertex = FlowGraph(graph.AddVertex vertex)
 
     /// Removes a vertex which has no outgoing edges.
     /// If vertex is not found, does returns original graph.
@@ -498,25 +498,25 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
     /// Its in edges are removed automatically.
     member this.TryRemove v =
         match graph.TryRemoveVertex v with
-            | Some g -> Some(DataFlowGraph(g))
+            | Some g -> Some(FlowGraph(g))
             | None -> None
 
     /// Connects two vertices using one-to-one, scatter or reduce connection types.
     member this.Connect (vTrg:'v, pTrg) (vSrc:'v, pSrc) =
         let graph = connectWithAdjusting (vTrg,pTrg) (vSrc,pSrc) connect graph
-        DataFlowGraph(graph)
+        FlowGraph(graph)
 
     /// Connects two vertices using collect connection type.
     member this.ConnectItem (vTrg:'v, pTrg) (vSrc:'v, pSrc) =
         let graph = connectWithAdjusting (vTrg,pTrg) (vSrc,pSrc) connectItem graph
-        DataFlowGraph(graph)
+        FlowGraph(graph)
 
     member this.Disconnect (target:'v, inpRef:InputRef) =
         let rank = vertexRank target graph
         let remove = target |> graph.InEdges |> Seq.filter (fun e -> e.InputRef = inpRef)                
         let ng = remove |> Seq.fold (fun (g:Dag<'v>) e -> g.RemoveEdge e) graph
         let ng = if rank > 0 then updateDownstreamRanks [target] ng else ng 
-        DataFlowGraph(ng)
+        FlowGraph(ng)
 
     member this.Disconnect (target:'v, inpRef, source:'v, outputRef) =
         let remove = source |> graph.OutEdges |> Seq.tryFind (fun e -> e.Target = target && e.InputRef = inpRef && e.OutputRef = outputRef)
@@ -528,7 +528,7 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
                 let vrank2 = vertexRank target graph
                 if(vrank <> vrank2) then updateDownstreamRanks [target] graph else graph
             | None -> graph
-        DataFlowGraph(ng)        
+        FlowGraph(ng)        
 
 
     member this.Vertices = graph.Vertices        
@@ -547,14 +547,14 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
             Seq.append (batchDisconnect |> Seq.map(fun (target, _, _, _) -> target)) (batchConnect |> Seq.map(fun (target, _, _, _) -> target))
             |> Seq.fold(fun graph target -> updateDownstreamRanks [target] graph) g2
 
-        DataFlowGraph(g3)
+        FlowGraph(g3)
 
 
-    static member Empty = new DataFlowGraph<'v>()
+    static member Empty = new FlowGraph<'v>()
 
     static member CreateFrom (methods:(int*'v) list) (connections:((int*OutputRef)*(int*InputRef)) list) =
-        let (g,m) = methods |> Seq.fold (fun (g:DataFlowGraph<'v>,m:Map<int,'v>) (i,v) -> let g' = g.Add(v) in (g', m.Add(i, v))) (DataFlowGraph.Empty, Map.empty) 
-        let f (g:DataFlowGraph<'v>) (src:(int*OutputRef), trg:(int*InputRef)) =
+        let (g,m) = methods |> Seq.fold (fun (g:FlowGraph<'v>,m:Map<int,'v>) (i,v) -> let g' = g.Add(v) in (g', m.Add(i, v))) (FlowGraph.Empty, Map.empty) 
+        let f (g:FlowGraph<'v>) (src:(int*OutputRef), trg:(int*InputRef)) =
             let mt = m.[fst trg]
             let ms = m.[fst src]
             let tt = mt.Inputs.[snd trg]
@@ -565,17 +565,23 @@ type DataFlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
         let g = connections |> Seq.fold f g
         (g, m)
 
+module FlowGraph =
+    let empty() = FlowGraph<'v>()
+    let add (v:'v) (g:FlowGraph<'v>) : FlowGraph<'v> = g.Add v
+    let connect (s,sp) (t,tp) (g:FlowGraph<'v>) : FlowGraph<'v> = g.Connect (t,tp) (s,sp)
+        
+
 open Angara.Data
 open Angara.Option
 
 type MdVertexState<'vs> = MdMap<int, 'vs>
 type VertexIndex = int list
 
-type DataFlowState<'v, 'vs when 'v : comparison and 'v :> IVertex> = 
+type VerticesState<'v, 'vs when 'v : comparison and 'v :> IVertex> = 
     Map<'v, MdVertexState<'vs>>
 
 module DataFlowState =
-    let tryGet (v,i) (s:DataFlowState<'v,'vs>) =
+    let tryGet (v,i) (s:VerticesState<'v,'vs>) =
         opt{
             let! vs = s |> Map.tryFind v
             return! vs |> MdMap.tryFind i

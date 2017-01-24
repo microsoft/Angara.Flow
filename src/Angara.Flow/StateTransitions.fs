@@ -36,13 +36,17 @@ module internal VertexTransitions =
         | VertexStatus.Reproduces _ as status -> status, NoAction // obsolete message
         | _ as status -> incorrectTransition "fail" status
 
-    let iteration startTime shape = function
-        | VertexStatus.Started t when t = startTime -> VertexStatus.Continues (t,shape), DownstreamStartOrIncomplete true
-        | VertexStatus.Continues (t,oldShape) when t = startTime -> VertexStatus.Continues (t, shape), DownstreamStartOrIncomplete (shape <> oldShape)  // todo: filter only changed outputs
-        | VertexStatus.Reproduces (t,oldShape) when t = startTime -> VertexStatus.Reproduces (t,oldShape), NoAction
+    let iteration<'d when 'd:>IVertexData> startTime (result:'d) vs = 
+        match vs.Status with
+        | VertexStatus.Started t when t = startTime -> 
+            { Status = VertexStatus.Continues (t,result.Shape); Data = Some result }, DownstreamStartOrIncomplete true
+        | VertexStatus.Continues (t,oldShape) when t = startTime -> 
+            { Status = VertexStatus.Continues (t,result.Shape); Data = Some result }, DownstreamStartOrIncomplete (result.Shape <> oldShape)  // todo: filter only changed outputs
+        | VertexStatus.Reproduces (t,oldShape) when t = startTime ->
+            { vs with Status = VertexStatus.Reproduces (t,oldShape) }, NoAction
         | VertexStatus.Started _
         | VertexStatus.Continues _ 
-        | VertexStatus.Reproduces _ as status -> status, NoAction // obsolete message
+        | VertexStatus.Reproduces _ -> vs, NoAction // obsolete message
         | _ as status -> incorrectTransition "iteration" status
 
     let succeeded startTime = function
@@ -62,11 +66,11 @@ module internal TransitionEffects =
     open StateOperations
 
     let vertexState (state : State<'v,'d>) (v : 'v, i : VertexIndex) =
-        state.FlowState |> Map.find v |> MdMap.tryFind i |> Option.get
+        state.Vertices |> Map.find v |> MdMap.tryFind i |> Option.get
 
     let tryVertexState (state : State<'v,'d>) (v : 'v, i : VertexIndex) =
         opt {
-            let! vs = state.FlowState |> Map.tryFind v 
+            let! vs = state.Vertices |> Map.tryFind v 
             return! MdMap.tryFind i vs
         }
 
@@ -88,7 +92,7 @@ module internal TransitionEffects =
                 match e.Type with
                 | OneToOne _ | Scatter _ | Collect _ -> i // actual indices will be equal or longer
                 | Reduce r -> List.ofMaxLength r i
-            match state.FlowState.TryFind e.Target with // finds real presented indices
+            match state.Vertices.TryFind e.Target with // finds real presented indices
             | Some tvs -> tvs |> MdMap.startingWith j |> MdMap.toSeq |> Seq.map(fun (k,_) -> e.Target,k)
             | None -> Seq.empty)
         |> Seq.concat
@@ -108,10 +112,10 @@ module internal TransitionEffects =
             | OneToOne rank -> seq { yield w, List.ofMaxLength rank i }
             | Scatter rank when i.Length >= rank -> seq { yield w, List.ofMaxLength (rank-1) i }
             | Scatter rank -> // e.g. input of `v` is unassigned
-                seq { yield w, List.ofMaxLength (rank-1) i |> minIndex (state.FlowState  |> Map.find w)  } 
+                seq { yield w, List.ofMaxLength (rank-1) i |> minIndex (state.Vertices  |> Map.find w)  } 
             | Reduce rank ->
                 let j = List.ofMaxLength rank i
-                let ws = state.FlowState |> Map.find w
+                let ws = state.Vertices |> Map.find w
                 let rs_ind = 
                     ws
                     |> MdMap.startingWith j
@@ -151,7 +155,7 @@ module internal TransitionEffects =
             | None -> None
 
         enumerateUpstream state vi
-        |> Seq.map(fun (w,j) -> (w,j), find j (state.FlowState |> Map.find w)) 
+        |> Seq.map(fun (w,j) -> (w,j), find j (state.Vertices |> Map.find w)) 
 
     let rec makeIncomplete (state : StateUpdate<'v,'d>) (v : 'v, i : VertexIndex) reason : StateUpdate<'v,'d> =
         match (v,i) |> tryVertexState state.State with
@@ -216,18 +220,18 @@ module internal TransitionEffects =
                             match edgeType with
                             | Scatter _ -> 
                                 opt {
-                                    let! us = state.State.FlowState |> Map.tryFind u
+                                    let! us = state.State.Vertices |> Map.tryFind u
                                     let! uis = us |> MdMap.tryFind i
                                     let! shape = uis.Status.TryGetShape()
                                     return shape.[outRef]
                                 }
                             | _ -> None // doesn't depend on the target dimension
                         else // urank > r; u is vectorized for the dimension
-                            match state.State.FlowState.[u] |> MdMap.tryGet i with
+                            match state.State.Vertices.[u] |> MdMap.tryGet i with
                             | Some selection when not selection.IsScalar -> Some(selection |> MdMap.toShallowSeq |> Seq.length)
                             | _ -> Some 0
                 
-                    let ws = state.State.FlowState.[w]
+                    let ws = state.State.Vertices.[w]
                     match ws |> MdMap.tryGet i with
                         | Some _ ->
                             let dimLen = 
@@ -402,7 +406,7 @@ module Normalization =
         let outdatedItems n item = Seq.init n id |> Seq.fold(fun ws j -> ws |> MdMap.add [j] (item j)) MdMap.empty
 
         let edgeState (e:Edge<_>) = 
-            let vs = update.State.FlowState.[e.Source]
+            let vs = update.State.Vertices.[e.Source]
             let outdated = MdMap.scalar VertexState<'d>.Outdated
             match e.Type with 
             | ConnectionType.OneToOne _ | ConnectionType.Collect _ -> vs
@@ -430,7 +434,7 @@ module Normalization =
         let dag = state.Graph.Structure
         let update = // adding missing vertex states 
             dag.TopoFold(fun (update : StateUpdate<'v,'d>) v _ -> 
-                match update.State.FlowState.TryFind v with
+                match update.State.Vertices.TryFind v with
                 | Some _ -> update
                 | None -> 
                     let update2 = add update v (MdMap.scalar VertexState<'d>.Unassigned)
@@ -438,11 +442,11 @@ module Normalization =
                 ) { State = state; Changes = Map.empty }
         
         // We should start methods, if possible
-        let flowState = update.State.FlowState
+        let vertices = update.State.Vertices
         let update2 = 
             dag.Vertices 
             |> Seq.map(fun v -> 
-                flowState.[v] |> MdMap.toSeq |> Seq.filter (fun (index,vis) -> 
+                vertices.[v] |> MdMap.toSeq |> Seq.filter (fun (index,vis) -> 
                     match vis.Status with
                     | VertexStatus.Incomplete _ -> true
                     | VertexStatus.Final _ -> false

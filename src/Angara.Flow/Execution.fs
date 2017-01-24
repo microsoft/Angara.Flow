@@ -79,7 +79,7 @@ module Artefacts =
     open Angara.Option
     open Angara.Data
     
-    let internal tryGetOutput (edge:Edge<Method>) (i:VertexIndex) (state:DataFlowState<Method,VertexState<MethodOutput>>) : Artefact option =
+    let internal tryGetOutput (edge:Edge<Method>) (i:VertexIndex) (state:VerticesState<Method,VertexState<MethodOutput>>) : Artefact option =
         opt {
             let! vs = state |> Map.tryFind edge.Source
             let! vis = vs |> MdMap.tryFind i
@@ -89,7 +89,7 @@ module Artefacts =
 
     /// Sames as getOutput, but "i" has rank one less than rank of the source vertex,
     /// therefore result is an array of artefacts for all available indices complementing "i".
-    let internal tryGetReducedOutput (edge:Edge<_>) (i:VertexIndex) (state:DataFlowState<'v,VertexState<MethodOutput>>) : Artefact[] option =
+    let internal tryGetReducedOutput (edge:Edge<_>) (i:VertexIndex) (state:VerticesState<'v,VertexState<MethodOutput>>) : Artefact[] option =
         match state |> Map.tryFind edge.Source with
         | Some svs ->
             let r = i.Length
@@ -109,7 +109,7 @@ module Artefacts =
 
     /// Returns the vertex' output artefact as n-dimensional typed jagged array, where n is a rank of the vertex.
     /// If n is zero, returns the typed object itself.
-    let getMdOutput (v:'v) (outRef: OutputRef) (graph:DataFlowGraph<'v>, state:DataFlowState<'v,VertexState<MethodOutput>>) = 
+    let getMdOutput (v:'v) (outRef: OutputRef) (graph:FlowGraph<'v>, state:VerticesState<'v,VertexState<MethodOutput>>) = 
         let vector = state |> Map.find v |> MdMap.map (fun vis -> vis.Data.Value.Output.TryGet(outRef).Value)
         let rank = vertexRank v graph.Structure
         if rank = 0 then 
@@ -138,7 +138,7 @@ module Artefacts =
     /// If element is Item, there is a single artefact for the input.
     /// If element is Array, there are a number of artefacts that altogether is an input (i.e. `reduce` or `collect` input edges).
     /// </returns>
-    let getInputs (state: DataFlowState<Method,VertexState<_>>, graph: DataFlowGraph<Method>) (v:Method, i:VertexIndex) : Input[] =
+    let getInputs (state: VerticesState<Method,VertexState<_>>, graph: FlowGraph<Method>) (v:Method, i:VertexIndex) : Input[] =
         let inputTypes = (v :> IVertex).Inputs
         let inputs = Array.init inputTypes.Length (fun i -> if inputTypes.[i].IsArray then Input.Array (Array.empty) else Input.NotAvailable)
         graph.Structure.InEdges v
@@ -377,12 +377,12 @@ type Runtime (source:IObservable<State<Method,MethodOutput> * RuntimeAction<Meth
             { Token = cancellationToken
               ProgressReporter = progress v index } |> ignore
 
-        let inputs = (v, index) |> Artefacts.getInputs (state.FlowState, state.Graph)
+        let inputs = (v, index) |> Artefacts.getInputs (state.Vertices, state.Graph)
         try
             let checkpoint =
                 if doContinue then
                     opt {
-                        let! vis = state.FlowState |> DataFlowState.tryGet (v,index)
+                        let! vis = state.Vertices |> DataFlowState.tryGet (v,index)
                         let! data = vis.Data
                         return! data.Checkpoint
                     } 
