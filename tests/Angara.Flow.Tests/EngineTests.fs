@@ -29,6 +29,12 @@ type MethodOp<'a,'b>(f: 'a->'b) =
             seq{ yield [box (f value)], null }
         | _ -> failwith "Incorrect number of arguments"
 
+type MethodMakeValueIter<'a>(values: 'a seq) =
+    inherit Method(System.Guid.NewGuid(), [], [typeof<'a>])
+
+    override x.Execute(_, _) =
+        values |> Seq.map(fun v -> [unbox v], unbox v)
+
 
 let pickFinal states =
     let isFinal (update : StateUpdate<Method,MethodOutput>) =
@@ -60,6 +66,8 @@ let runToCompletion state =
     final.GetAwaiter().GetResult()
 
 
+
+
 [<Test; Category("CI")>]
 let ``Engine executes a flow containing a single method`` () =
     let methodOne : Method = upcast MethodMakeValue System.Math.PI
@@ -84,7 +92,7 @@ let ``Engine executes a flow containing a single method`` () =
 
 
 [<Test; Category("CI")>]
-let ``Engine executes a flow containing a chain of two methods`` () =
+let ``Engine executes a flow of two chained methods`` () =
     let methodOne : Method = upcast MethodMakeValue<float> System.Math.PI
     let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
 
@@ -108,3 +116,39 @@ let ``Engine executes a flow containing a chain of two methods`` () =
     let s = runToCompletion state
     let result : float = s |> output (methodInc,0)
     Assert.AreEqual(System.Math.PI + 1.0, result, "Execution result")
+
+
+
+[<Test; Category("CI")>]
+let ``Engine executes an iterative method and we can see intermediate outputs`` () =
+    let pi = System.Math.PI
+    let iters = [ for i in 0..3 -> float(i)/3.0 * pi ]
+    let methodOne : Method = upcast MethodMakeValueIter<float> iters
+
+    let graph = 
+        FlowGraph.empty()
+        |> FlowGraph.add methodOne
+    let vertices = VerticesState([])
+    let state = 
+        { TimeIndex = 0UL
+          Graph = graph
+          Vertices = vertices          
+        }
+        
+    use engine = new Engine(state, Scheduler.ThreadPool())
+    let iterations = 
+        engine.Changes.TakeWhile(fun update ->
+            match update.State.Vertices.[methodOne].AsScalar().Status with 
+            | VertexStatus.Final _ -> false
+            | _ -> true)
+        |> Observable.choose(fun update ->
+            match update.Changes.[methodOne] with
+            | VertexChanges.Modified (_,_,vs,_) when vs.AsScalar().Data.IsSome ->
+                Some (vs.AsScalar().Data.Value.Output.TryGet(0).Value)
+            | _ -> None)
+        |> Observable.ToList
+        
+    engine.Start()
+
+    let actualIters = iterations.GetAwaiter().GetResult() |> Seq.toList
+    Assert.AreEqual(iters, actualIters, "Iterations")    
