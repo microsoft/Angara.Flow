@@ -38,19 +38,29 @@ type MethodMakeValueIter<'a>(values: 'a seq) =
 
 let pickFinal states =
     let isFinal (update : StateUpdate<Method,MethodOutput>) =
-        match 
+        let failedMethods = 
             update.State.Vertices 
             |> Map.toSeq 
-            |> Seq.choose(fun (_,vs) -> 
-                match vs.AsScalar().Status with
-                | VertexStatus.Incomplete (IncompleteReason.ExecutionFailed e) -> Some e
-                | _ -> None)
-            |> Seq.toList with
+            |> Seq.map(fun (_,vs) -> 
+                vs 
+                |> Angara.Data.MdMap.toSeq
+                |> Seq.choose(fun (_, vis) ->
+                    match vis.Status with
+                    | VertexStatus.Incomplete (IncompleteReason.ExecutionFailed e) -> Some e
+                    | _ -> None))                  
+            |> Seq.concat
+            |> Seq.toList
+        match failedMethods with
         | [] ->
-            update.State.Vertices |> Map.forall(fun _ vs -> 
-                match vs.AsScalar().Status with
-                | VertexStatus.Final _ -> true
-                | _ -> false)
+            update.State.Vertices 
+            |> Map.toSeq
+            |> Seq.forall(fun (_,vs) -> 
+                vs 
+                |> Angara.Data.MdMap.toSeq
+                |> Seq.forall(fun (_, vis) ->
+                    match vis.Status with
+                    | VertexStatus.Final _ -> true
+                    | _ -> false))
         | errors -> failwithf "Some methods failed: %A" errors
 
     Observable.FirstAsync(states, new Func<StateUpdate<Method,MethodOutput>, bool>(isFinal))
@@ -66,6 +76,9 @@ let runToCompletion state =
     final.GetAwaiter().GetResult()
 
 
+
+//--------------------------------------------------------------------------------------------------------------------
+// Tests
 
 
 [<Test; Category("CI")>]
@@ -102,9 +115,6 @@ let ``Engine executes a flow of two chained methods`` () =
         |> FlowGraph.add methodInc
         |> FlowGraph.connect (methodOne, 0) (methodInc, 0)
 
-    // The initial state has no value for the method. 
-    // It must be built automatically by the engine when it is started.
-    // Automatic initial state of the method will be CanStart.
     let vertices = VerticesState([])
 
     let state = 
@@ -152,3 +162,33 @@ let ``Engine executes an iterative method and we can see intermediate outputs`` 
 
     let actualIters = iterations.GetAwaiter().GetResult() |> Seq.toList
     Assert.AreEqual(iters, actualIters, "Iterations")    
+
+
+[<Test; Category("CI")>]
+let ``Engine executes a flow with vector methods`` () =
+    let pi = System.Math.PI    
+    let input = [| for k in 0..3 -> float(k)*pi |]
+
+    let methodMakeArr : Method = upcast MethodMakeValue<float[]> input
+    let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
+    let methodSum : Method = upcast MethodOp<float[],float> Array.sum
+
+    let graph = 
+        FlowGraph.empty()
+        |> FlowGraph.add methodMakeArr
+        |> FlowGraph.add methodInc
+        |> FlowGraph.add methodSum
+        |> FlowGraph.connect (methodMakeArr, 0) (methodInc, 0)
+        |> FlowGraph.connect (methodInc, 0) (methodSum, 0)
+
+    let vertices = VerticesState([])
+
+    let state = 
+        { TimeIndex = 0UL
+          Graph = graph
+          Vertices = vertices          
+        }
+        
+    let s = runToCompletion state
+    let result : float = s |> output (methodSum,0)
+    Assert.AreEqual(input |> Array.map (fun v -> v+1.0) |> Array.sum, result, "Execution result")
