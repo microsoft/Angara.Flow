@@ -115,12 +115,10 @@ let ``Engine executes a flow of two chained methods`` () =
         |> FlowGraph.add methodInc
         |> FlowGraph.connect (methodOne, 0) (methodInc, 0)
 
-    let vertices = VerticesState([])
-
     let state = 
         { TimeIndex = 0UL
           Graph = graph
-          Vertices = vertices          
+          Vertices = VerticesState []           
         }
         
     let s = runToCompletion state
@@ -138,11 +136,10 @@ let ``Engine executes an iterative method and we can see intermediate outputs`` 
     let graph = 
         FlowGraph.empty()
         |> FlowGraph.add methodOne
-    let vertices = VerticesState([])
     let state = 
         { TimeIndex = 0UL
           Graph = graph
-          Vertices = vertices          
+          Vertices = VerticesState []           
         }
         
     use engine = new Engine(state, Scheduler.ThreadPool())
@@ -178,17 +175,50 @@ let ``Engine executes a flow with vector methods`` () =
         |> FlowGraph.add methodMakeArr
         |> FlowGraph.add methodInc
         |> FlowGraph.add methodSum
+        // An output of type `float[]` is connected to an input of type `float`,
+        // so the latter is vectorized to be called for each of the input element.
         |> FlowGraph.connect (methodMakeArr, 0) (methodInc, 0)
+        // A vector of float values is connected to an input of type `float[]`, 
+        // so `methodSum` will reduce the vector.
         |> FlowGraph.connect (methodInc, 0) (methodSum, 0)
-
-    let vertices = VerticesState([])
 
     let state = 
         { TimeIndex = 0UL
           Graph = graph
-          Vertices = vertices          
+          Vertices = VerticesState []           
         }
         
     let s = runToCompletion state
     let result : float = s |> output (methodSum,0)
     Assert.AreEqual(input |> Array.map (fun v -> v+1.0) |> Array.sum, result, "Execution result")
+
+
+[<Test; Category("CI")>]
+let ``Engine executes a flow with vector of length zero`` () =
+    // The source method will produce an empty array.
+    // Then this array is passed to a vectorized method that increments each element of the input array.
+    // In case of empty input array, the vectorized method produces an empty array as well.
+    // Thus the final sink method is called for an empty array and produces a default value, 0.
+    let input = Array.empty
+
+    let methodMakeArr : Method = upcast MethodMakeValue<float[]> input
+    let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
+    let methodSum : Method = upcast MethodOp<float[],float> (fun arr -> if arr.Length = 0 then 0.0 else Array.sum arr)
+
+    let graph = 
+        FlowGraph.empty()
+        |> FlowGraph.add methodMakeArr
+        |> FlowGraph.add methodInc
+        |> FlowGraph.add methodSum
+        |> FlowGraph.connect (methodMakeArr, 0) (methodInc, 0)
+        |> FlowGraph.connect (methodInc, 0) (methodSum, 0)
+
+    let state = 
+        { TimeIndex = 0UL
+          Graph = graph
+          Vertices = VerticesState []          
+        }
+        
+    let s = runToCompletion state
+    let result : float = s |> output (methodSum,0)
+    Assert.AreEqual(0.0, result, "Execution result")

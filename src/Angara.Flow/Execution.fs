@@ -100,11 +100,14 @@ module Artefacts =
                 |> Seq.filter(fun (j,_) -> j.Length = r + 1) 
                 |> Seq.map(fun (j,vis) -> (List.last j, vis.Data |> Option.bind(fun data -> data.Output.TryGet edge.OutputRef))) 
                 |> Seq.toList
-            let n = items |> Seq.map fst |> Seq.max
-            let map = items |> Map.ofList
-            let artefacts = Seq.init (n+1) (fun i -> i) |> Seq.map(fun i -> match map.TryFind(i) with | Some(a) -> a | None -> None) |> Seq.toList
-            if artefacts |> List.forall Option.isSome then artefacts |> Seq.map Option.get |> Seq.toArray |> Option.Some
-            else None
+            match items with
+            | [] -> Some Array.empty
+            | _ ->
+                let n = items |> Seq.map fst |> Seq.max
+                let map = items |> Map.ofList
+                let artefacts = Seq.init (n+1) (fun i -> i) |> Seq.map(fun i -> match map.TryFind(i) with | Some(a) -> a | None -> None) |> Seq.toList
+                if artefacts |> List.forall Option.isSome then artefacts |> Seq.map Option.get |> Seq.toArray |> Option.Some
+                else None
         | None -> None
 
     /// Returns the vertex' output artefact as n-dimensional typed jagged array, where n is a rank of the vertex.
