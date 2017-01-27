@@ -303,13 +303,14 @@ and [<Class>] ThreadPoolScheduler() =
     
     override x.Start (f: unit -> unit) =
         let id = System.Threading.Interlocked.Increment(&ExSeq)        
-        try
-            Trace.Runtime.TraceEvent(Trace.Event.Start, RuntimeId.SchedulerExecution, sprintf "Execution %d started" id)
-            f()
-            Trace.Runtime.TraceEvent(Trace.Event.Stop, RuntimeId.SchedulerExecution, sprintf "Execution %d finished" id)
-        with ex ->
-            Trace.Runtime.TraceEvent(Trace.Event.Error, RuntimeId.SchedulerExecution, sprintf "Execution %d failed: %O" id ex)
-            raise ex
+        System.Threading.Tasks.Task.Factory.StartNew((fun() ->
+            try
+                Trace.Runtime.TraceEvent(Trace.Event.Start, RuntimeId.SchedulerExecution, sprintf "Execution %d started" id)
+                f()
+                Trace.Runtime.TraceEvent(Trace.Event.Stop, RuntimeId.SchedulerExecution, sprintf "Execution %d finished" id)
+            with ex ->
+                Trace.Runtime.TraceEvent(Trace.Event.Error, RuntimeId.SchedulerExecution, sprintf "Execution %d failed: %O" id ex)
+                raise ex), CancellationToken.None, Tasks.TaskCreationOptions.LongRunning, scheduler) |> ignore
 
 [<Sealed>]
 type Runtime (source:IObservable<State<Method,MethodOutput> * RuntimeAction<Method> list>, scheduler : Scheduler) =

@@ -227,6 +227,42 @@ let ``Engine executes a flow with vector of length zero`` () =
     Assert.AreEqual(0.0, result, "Execution result")
 
 [<Test; Category("CI")>]
+let ``Engine allows to pause an executing iterative method``() =
+    let iters = Seq.initInfinite (fun i -> System.Threading.Thread.Sleep(10); float(i))
+    let methodIter : Method = upcast MethodMakeValueIter<float> iters
+
+    let graph = 
+        FlowGraph.empty
+        |> FlowGraph.add methodIter
+
+    let state =
+        { TimeIndex = 0UL
+          Graph = graph
+          Vertices = VerticesState [] }
+
+
+    use engine = new Engine(state, Scheduler.ThreadPool())
+    engine.Start()
+
+    let s5 = engine.Changes.Take(10).GetAwaiter().GetResult()
+    match s5.State.Vertices.[methodIter].AsScalar().Status with
+    | VertexStatus.Continues _ -> () // ok
+    | _ -> Assert.Fail "Unexpected status"
+
+    let finish = 
+        engine.Changes.FirstAsync(fun update ->
+            match update.State.Vertices.[methodIter].AsScalar().Status with
+            | VertexStatus.Paused _ -> true
+            | _ -> false)
+            .GetAwaiter()
+
+    engine.Post( Messages.Stop { Vertex = methodIter; Index = VertexIndex.Empty })
+
+    let s = finish.GetResult()
+
+    Assert.LessOrEqual(1.0, s.State |> output (methodIter, 0), "Output")
+
+[<Test; Category("CI")>]
 let ``Engine allows to continue a paused iterative method and a checkpoint enables to start from last iteration`` () =
     let iters = [| for i in 0..10 -> float(i) * System.Math.PI |]
     let methodIter : Method = upcast MethodMakeValueIter<float> iters
@@ -277,3 +313,8 @@ let ``Engine allows to continue a paused iterative method and a checkpoint enabl
     let result : float = s |> output (methodInc,0)
     Assert.AreEqual(Array.last iters + 1.0, result, "Execution result")
     Assert.AreEqual(iters.Length - k, iterCount.GetResult(),  "Number of iterations performed")
+
+
+[<Test; Category("CI")>]
+let ``Engine allows to cancel execution`` () = 
+    Assert.Inconclusive("Incomplete");
