@@ -566,7 +566,7 @@ type FlowGraph<'v when 'v : comparison and 'v :> IVertex> (graph:Dag<'v>) =
         (g, m)
 
 module FlowGraph =
-    let empty() = FlowGraph<'v>()
+    let empty<'v when 'v : comparison and 'v :> IVertex> : FlowGraph<'v> = FlowGraph<'v>()
     let add (v:'v) (g:FlowGraph<'v>) : FlowGraph<'v> = g.Add v
     let connect (s,sp) (t,tp) (g:FlowGraph<'v>) : FlowGraph<'v> = g.Connect (t,tp) (s,sp)
         

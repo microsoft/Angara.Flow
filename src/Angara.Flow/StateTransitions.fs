@@ -449,6 +449,7 @@ module Normalization =
                 vertices.[v] |> MdMap.toSeq |> Seq.filter (fun (index,vis) -> 
                     match vis.Status with
                     | VertexStatus.Incomplete _ -> true
+                    | VertexStatus.Paused _ 
                     | VertexStatus.Final _ -> false
                     | x -> failwith (sprintf "Vertex %O.[%A] has status %O which is not allowed in an initial state" v index x))
                 |>Seq.map(fun q -> (v,q))) |> Seq.concat

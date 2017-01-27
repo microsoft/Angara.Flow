@@ -43,12 +43,15 @@ module Messages =
         | Succeeded     of SucceededMessage<'v> // todo: hot/cold final artefacts (incl. distributed case, June/July 2016)
         | Failed        of FailedMessage<'v>
 
+    open Angara
     open VertexTransitions
 
     let noChanges = Map.empty
 
+
     let transition (m : Message<'v,'d>) (state : State<'v,'d>) : StateUpdate<'v,'d> =
         let state = { state with TimeIndex = state.TimeIndex  + 1UL }
+        Trace.StateMachine.TraceEvent(Trace.Event.Verbose, 0, sprintf "[%d] Message: %A" state.TimeIndex m)
         
         let vertexState = vertexState state 
         let changeStatus vs (status,effect:TransitionEffect) = { vs with Status = status }, effect

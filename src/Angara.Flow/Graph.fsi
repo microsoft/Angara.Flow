@@ -149,7 +149,7 @@ type FlowGraph<'v when 'v : comparison and 'v :> IVertex> =
     static member Empty : FlowGraph<'v>
 
 module FlowGraph =
-    val empty : unit -> FlowGraph<'v>
+    val empty<'v when 'v : comparison and 'v :> IVertex> : FlowGraph<'v>
     val add : 'v -> FlowGraph<'v> -> FlowGraph<'v>
     val connect : 'v * InputRef -> 'v * OutputRef -> FlowGraph<'v> -> FlowGraph<'v>
 

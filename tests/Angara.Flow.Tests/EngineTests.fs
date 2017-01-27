@@ -5,6 +5,7 @@ open NUnit.Framework
 open Angara.Graph
 open Angara.States
 open Angara.Execution
+open Angara.Data
 open System.Diagnostics
 open System.Threading
 open System
@@ -32,8 +33,12 @@ type MethodOp<'a,'b>(f: 'a->'b) =
 type MethodMakeValueIter<'a>(values: 'a seq) =
     inherit Method(System.Guid.NewGuid(), [], [typeof<'a>])
 
-    override x.Execute(_, _) =
-        values |> Seq.map(fun v -> [unbox v], unbox v)
+    override x.Execute(_, checkpoint) =
+        let iters, i0 = 
+            match checkpoint with
+            | Some i -> values |> Seq.skip (unbox i), unbox i
+            | None -> values, 0
+        iters |> Seq.mapi(fun i v -> [unbox v], unbox (i+i0))
 
 
 let pickFinal states =
@@ -63,8 +68,8 @@ let pickFinal states =
                     | _ -> false))
         | errors -> failwithf "Some methods failed: %A" errors
 
-    Observable.FirstAsync(states, new Func<StateUpdate<Method,MethodOutput>, bool>(isFinal))
-    |> Observable.map(fun update -> update.State)
+    (Observable.FirstAsync(states, new Func<StateUpdate<Method,MethodOutput>, bool>(isFinal)) |> Observable.map(fun update -> update.State)).GetAwaiter()
+    
 
 let output (m:Method, output:OutputRef) (state:State<Method,MethodOutput>) =
     unbox (state.Vertices.[m].AsScalar().Data.Value.Output.TryGet(output).Value)
@@ -73,9 +78,7 @@ let runToCompletion state =
     use engine = new Engine(state, Scheduler.ThreadPool())
     let final = pickFinal engine.Changes   
     engine.Start()
-    final.GetAwaiter().GetResult()
-
-
+    final.GetResult()
 
 //--------------------------------------------------------------------------------------------------------------------
 // Tests
@@ -85,7 +88,7 @@ let runToCompletion state =
 let ``Engine executes a flow containing a single method`` () =
     let methodOne : Method = upcast MethodMakeValue System.Math.PI
     let graph = 
-        FlowGraph.empty()
+        FlowGraph.empty
         |> FlowGraph.add methodOne
 
     // The initial state has no value for the method. 
@@ -110,7 +113,7 @@ let ``Engine executes a flow of two chained methods`` () =
     let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
 
     let graph = 
-        FlowGraph.empty()
+        FlowGraph.empty
         |> FlowGraph.add methodOne
         |> FlowGraph.add methodInc
         |> FlowGraph.connect (methodOne, 0) (methodInc, 0)
@@ -134,7 +137,7 @@ let ``Engine executes an iterative method and we can see intermediate outputs`` 
     let methodOne : Method = upcast MethodMakeValueIter<float> iters
 
     let graph = 
-        FlowGraph.empty()
+        FlowGraph.empty
         |> FlowGraph.add methodOne
     let state = 
         { TimeIndex = 0UL
@@ -171,7 +174,7 @@ let ``Engine executes a flow with vector methods`` () =
     let methodSum : Method = upcast MethodOp<float[],float> Array.sum
 
     let graph = 
-        FlowGraph.empty()
+        FlowGraph.empty
         |> FlowGraph.add methodMakeArr
         |> FlowGraph.add methodInc
         |> FlowGraph.add methodSum
@@ -206,7 +209,7 @@ let ``Engine executes a flow with vector of length zero`` () =
     let methodSum : Method = upcast MethodOp<float[],float> (fun arr -> if arr.Length = 0 then 0.0 else Array.sum arr)
 
     let graph = 
-        FlowGraph.empty()
+        FlowGraph.empty
         |> FlowGraph.add methodMakeArr
         |> FlowGraph.add methodInc
         |> FlowGraph.add methodSum
@@ -222,3 +225,55 @@ let ``Engine executes a flow with vector of length zero`` () =
     let s = runToCompletion state
     let result : float = s |> output (methodSum,0)
     Assert.AreEqual(0.0, result, "Execution result")
+
+[<Test; Category("CI")>]
+let ``Engine allows to continue a paused iterative method and a checkpoint enables to start from last iteration`` () =
+    let iters = [| for i in 0..10 -> float(i) * System.Math.PI |]
+    let methodIter : Method = upcast MethodMakeValueIter<float> iters
+    let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
+
+    let graph =
+        FlowGraph.empty
+        |> FlowGraph.add methodIter
+        |> FlowGraph.add methodInc
+        |> FlowGraph.connect (methodIter,0) (methodInc,0)
+
+
+    // We create an initial state where the method `methodIter` is paused after `k` iterations with corresponding checkpoint.
+    let k = 3 
+    let state = 
+        { TimeIndex = 0UL
+          Graph = graph
+          Vertices = [methodIter, MdMap.scalar( { Status = VertexStatus.Paused [0]; Data = Some(MethodOutput.Full([iters.[k]],Some (box k))) }) ] |> Map.ofList
+        }
+
+    use engine = new Engine(state, Scheduler.ThreadPool())
+    let final = pickFinal engine.Changes 
+    let iterCount = 
+       engine.Changes
+        .TakeWhile(fun update -> // We stop watching for changes when the `methodIter` is completed.
+            match update.State.Vertices.[methodIter].AsScalar().Status with 
+            | VertexStatus.Final _ -> false
+            | _ -> true)
+        .Count(fun update -> // Counting number of iterations performed by `methodIter` since it will be resumed.
+            match update.Changes |> Map.tryFind methodIter with
+            | Some (Modified(_,oldvs,vs,_)) ->
+                match oldvs.AsScalar().Status,vs.AsScalar().Status with
+                | VertexStatus.Paused _, VertexStatus.Continues _ -> false // this transition indicates that the method is started but not yet produced any output
+                | VertexStatus.Continues _, VertexStatus.Continues _ -> true // indicates that new iteration output produced
+                | _ -> false
+            | _ -> false)
+        .GetAwaiter()
+
+    engine.Start()
+
+    // We resume the paused `methodIter` using message `Start`.
+    // The method status will transit to `Continues` and it will be executed using the checkpoint.
+    // `MethodMakeValueIter.Execute` will use the checkpoint to start from the last iteration but not from beginning.
+    engine.Post (Messages.Start { Vertex = methodIter; Index = VertexIndex.Empty; CanStartTime = None })
+
+    let s = final.GetResult()
+
+    let result : float = s |> output (methodInc,0)
+    Assert.AreEqual(Array.last iters + 1.0, result, "Execution result")
+    Assert.AreEqual(iters.Length - k, iterCount.GetResult(),  "Number of iterations performed")

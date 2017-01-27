@@ -57,6 +57,11 @@ type MethodOutput =
     /// If `None`, the output hasn't been produced yet.
     member Checkpoint : MethodCheckpoint option
 
+    member TryGet : OutputRef -> Artefact option
+    
+    /// Creates an instance of `MethodOutput` that contains the actual output data.
+    static member Full: Artefact list * MethodCheckpoint option -> MethodOutput
+
 //////////////////////////////////////////////
 // 
 // Engine
@@ -87,8 +92,4 @@ type Engine =
     member Progress : IObservable<Method * VertexIndex * float>
     member Start : unit -> unit
     
-    /// Alters the flow dependency graph by performing the batch of operations in the specific order:
-    /// disconnect vertices; remove vertices; merge with another graph; connect vertices.
-    /// The operation asynchronously completes when all the operations succeed.
-    //member AlterAsync : AlterMessage<Method,MethodVertexData> -> Async<unit>
-
+    member Post : Messages.Message<Method, MethodOutput> -> unit

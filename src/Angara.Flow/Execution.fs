@@ -493,6 +493,8 @@ type Engine(initialState : State<Method, MethodOutput>, scheduler:Scheduler) =
 
     member x.Start() = stateMachine.Start()
 
+    member x.Post(m:Messages.Message<Method,MethodOutput>) =
+        messages.Next m
 
     interface IDisposable with
         member x.Dispose() = 
