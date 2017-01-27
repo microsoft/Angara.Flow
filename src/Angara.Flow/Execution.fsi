@@ -39,7 +39,7 @@ type Method =
 
 /// Represents output artefacts of a method.
 /// An artefact can be missing, e.g. if the dataflow snapshot couldn't be restored completely.
-type Output = 
+type OutputArtefacts = 
     | Full    of Artefact list
     | Partial of (Artefact option) list
     member TryGet : OutputRef -> Artefact option
@@ -52,10 +52,11 @@ type MethodOutput =
     // todo: option for both Output * MethodCheckpoint?
 
     /// Keeps output artefacts of the vertex. Can be missing if some or all output artefacts couldn't be deserialized.
-    member Output : Output
+    member Artefacts : OutputArtefacts
     /// Contains information sufficient to reproduce the corresponding outputs and continue the execution from the checkpoint.
     /// If `None`, the output hasn't been produced yet.
     member Checkpoint : MethodCheckpoint option
+
 
     member TryGet : OutputRef -> Artefact option
     

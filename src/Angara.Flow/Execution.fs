@@ -11,7 +11,7 @@ type Artefact = obj
 type MethodCheckpoint = obj
 type MethodId = Guid
 
-type Output = 
+type OutputArtefacts = 
     | Full    of Artefact list
     | Partial of (Artefact option) list
     member x.TryGet (outRef:OutputRef) =
@@ -46,7 +46,7 @@ type Method(id: MethodId, inputs: Type list, outputs: Type list) =
        
 
 [<Class>] 
-type MethodOutput private (shape: OutputShape, output: Output, checkpoint: MethodCheckpoint option) =
+type MethodOutput private (shape: OutputShape, output: OutputArtefacts, checkpoint: MethodCheckpoint option) =
     
     static let getShape (a:Artefact) = 
         match a with
@@ -57,17 +57,17 @@ type MethodOutput private (shape: OutputShape, output: Output, checkpoint: Metho
     interface IVertexData with
         member x.Shape = shape
         
-    member x.Output = output
+    member x.Artefacts = output
     member x.Checkpoint = checkpoint
 
     member x.TryGet(outRef) : Artefact option = 
         match output with
-        | Output.Full art when outRef < art.Length -> art.[outRef] |> Some
-        | Output.Partial art when outRef < art.Length -> art.[outRef]
+        | OutputArtefacts.Full art when outRef < art.Length -> art.[outRef] |> Some
+        | OutputArtefacts.Partial art when outRef < art.Length -> art.[outRef]
         | _ -> None
     
     static member Full(artefacts: Artefact list, checkpoint: MethodCheckpoint option) =
-        MethodOutput(artefacts |> List.map getShape, Output.Full artefacts, checkpoint)
+        MethodOutput(artefacts |> List.map getShape, OutputArtefacts.Full artefacts, checkpoint)
 
  
 type Input = 
@@ -84,7 +84,7 @@ module Artefacts =
             let! vs = state |> Map.tryFind edge.Source
             let! vis = vs |> MdMap.tryFind i
             let! data = vis.Data
-            return! data.Output.TryGet edge.OutputRef
+            return! data.Artefacts.TryGet edge.OutputRef
         }
 
     /// Sames as getOutput, but "i" has rank one less than rank of the source vertex,
@@ -98,7 +98,7 @@ module Artefacts =
                 |> MdMap.startingWith i 
                 |> MdMap.toSeq 
                 |> Seq.filter(fun (j,_) -> j.Length = r + 1) 
-                |> Seq.map(fun (j,vis) -> (List.last j, vis.Data |> Option.bind(fun data -> data.Output.TryGet edge.OutputRef))) 
+                |> Seq.map(fun (j,vis) -> (List.last j, vis.Data |> Option.bind(fun data -> data.Artefacts.TryGet edge.OutputRef))) 
                 |> Seq.toList
             match items with
             | [] -> Some Array.empty
@@ -113,7 +113,7 @@ module Artefacts =
     /// Returns the vertex' output artefact as n-dimensional typed jagged array, where n is a rank of the vertex.
     /// If n is zero, returns the typed object itself.
     let getMdOutput (v:'v) (outRef: OutputRef) (graph:FlowGraph<'v>, state:VerticesState<'v,VertexState<MethodOutput>>) = 
-        let vector = state |> Map.find v |> MdMap.map (fun vis -> vis.Data.Value.Output.TryGet(outRef).Value)
+        let vector = state |> Map.find v |> MdMap.map (fun vis -> vis.Data.Value.Artefacts.TryGet(outRef).Value)
         let rank = vertexRank v graph.Structure
         if rank = 0 then 
             vector |> MdMap.find []

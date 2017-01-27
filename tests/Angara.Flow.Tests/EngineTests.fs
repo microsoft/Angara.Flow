@@ -72,7 +72,7 @@ let pickFinal states =
     
 
 let output (m:Method, output:OutputRef) (state:State<Method,MethodOutput>) =
-    unbox (state.Vertices.[m].AsScalar().Data.Value.Output.TryGet(output).Value)
+    unbox (state.Vertices.[m].AsScalar().Data.Value.Artefacts.TryGet(output).Value)
 
 let runToCompletion state =
     use engine = new Engine(state, Scheduler.ThreadPool())
@@ -154,7 +154,7 @@ let ``Engine executes an iterative method and we can see intermediate outputs`` 
         |> Observable.choose(fun update ->
             match update.Changes.[methodOne] with
             | VertexChanges.Modified (_,_,vs,_) when vs.AsScalar().Data.IsSome ->
-                Some (vs.AsScalar().Data.Value.Output.TryGet(0).Value)
+                Some (vs.AsScalar().Data.Value.Artefacts.TryGet(0).Value)
             | _ -> None)
         |> Observable.ToList
         
