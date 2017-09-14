@@ -17,8 +17,8 @@ type MethodId = Guid
 
 /// A graph vertex which can be executed.
 [<AbstractClass>]
-type Method =
-    new : MethodId * Type list * Type list -> Method
+type ExecutableMethod =
+    new : MethodId * Type list * Type list -> ExecutableMethod
 
     interface IVertex
     interface IComparable 
@@ -83,14 +83,27 @@ type Scheduler =
 /// It makes the changes flow from the state machine to the runtime and
 /// makes the messages flow from the runtime to the state machine.
 [<Class>]
-type Engine =
-    new : State<Method, MethodOutput> * Scheduler -> Engine
+type Engine<'m when 'm:>ExecutableMethod and 'm:comparison> =
+    new : State<'m, MethodOutput> * Scheduler -> Engine<'m>
     interface IDisposable
 
-    member State : State<Method, MethodOutput>
-    member Changes : IObservable<StateUpdate<Method, MethodOutput>>
+    member State : State<'m, MethodOutput>
+    member Changes : IObservable<StateUpdate<'m, MethodOutput>>
     /// Allows to see progress of method evaluation.
-    member Progress : IObservable<Method * VertexIndex * float>
+    member Progress : IObservable<'m * VertexIndex * float>
     member Start : unit -> unit
     
-    member Post : Messages.Message<Method, MethodOutput> -> unit
+    member Post : Messages.Message<'m, MethodOutput> -> unit
+
+module Control =
+    open System.Reactive.Linq;
+
+    /// Asynchronously returns a successful final state of the state updates sequence.
+    /// If the state has failed method, throws an exception.
+    val pickFinal<'m when 'm:>ExecutableMethod and 'm:comparison> : IObservable<StateUpdate<'m,MethodOutput>> -> Reactive.Subjects.AsyncSubject<State<'m,MethodOutput>>
+
+    /// Extracts an output artefact from the state expecting that the artefact is scalar.
+    val outputScalar<'m,'a when 'm:>ExecutableMethod and 'm:comparison> : 'm * OutputRef -> State<'m, MethodOutput> -> 'a
+
+    /// Starts the flow from the given flow state blocking until the final state is reached and then returns that state.
+    val runToFinal<'m when 'm:>ExecutableMethod and 'm:comparison> : State<'m,MethodOutput> -> State<'m,MethodOutput>

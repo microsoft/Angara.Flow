@@ -1,29 +1,29 @@
 NUGET
   remote: https://www.nuget.org/api/v2
-    Microsoft.NETCore.Platforms (1.1) - framework: netstandard10, netstandard12, netstandard13, >= netstandard15
-    Microsoft.NETCore.Targets (1.1) - framework: netstandard10, netstandard12, netstandard13, >= netstandard15
+    Microsoft.NETCore.Platforms (1.1) - restriction: || (== netstandard1.0) (== netstandard1.2) (== netstandard1.3) (>= netstandard1.5)
+    Microsoft.NETCore.Targets (1.1) - restriction: || (== netstandard1.0) (== netstandard1.2) (== netstandard1.3) (>= netstandard1.5)
     MSFT.ParallelExtensionsExtras (1.2)
     System.Reactive (3.1.1)
       System.Reactive.PlatformServices (>= 3.1.1)
-      System.Reactive.Windows.Threading (>= 3.1.1) - framework: >= net45, winv4.5.1, wpav8.1
-      System.Reactive.WindowsRuntime (>= 3.1.1) - framework: winv4.5.1, wpav8.1
-    System.Reactive.Core (3.1.1) - framework: >= net45, >= netstandard10, winv4.5.1, wpav8.1
-      System.Reactive.Interfaces (>= 3.1.1) - framework: >= net45, >= netstandard10, netcore10
-    System.Reactive.Interfaces (3.1.1) - framework: >= net45, >= netstandard10
+      System.Reactive.Windows.Threading (>= 3.1.1) - restriction: || (== win81) (== wpa81) (>= net45)
+      System.Reactive.WindowsRuntime (>= 3.1.1) - restriction: || (== win81) (== wpa81)
+    System.Reactive.Core (3.1.1) - restriction: || (== win81) (>= netstandard1.0)
+      System.Reactive.Interfaces (>= 3.1.1) - restriction: >= netstandard1.0
+    System.Reactive.Interfaces (3.1.1) - restriction: >= netstandard1.0
     System.Reactive.Linq (3.1.1)
-      System.Reactive.Core (>= 3.1.1) - framework: >= net45, >= netstandard10
-      System.Runtime.InteropServices.WindowsRuntime (>= 4.0.1) - framework: >= netstandard10
+      System.Reactive.Core (>= 3.1.1) - restriction: >= netstandard1.0
+      System.Runtime.InteropServices.WindowsRuntime (>= 4.0.1) - restriction: >= netstandard1.0
     System.Reactive.PlatformServices (3.1.1)
       System.Reactive.Linq (>= 3.1.1)
-    System.Reactive.Windows.Threading (3.1.1) - framework: >= net45, winv4.5.1, wpav8.1
+    System.Reactive.Windows.Threading (3.1.1) - restriction: || (== win81) (== wpa81) (>= net45)
       System.Reactive.Core (>= 3.1.1)
-    System.Reactive.WindowsRuntime (3.1.1) - framework: winv4.5.1, wpav8.1
+    System.Reactive.WindowsRuntime (3.1.1) - restriction: || (== win81) (== wpa81)
       System.Reactive.Linq (>= 3.1.1)
-    System.Runtime (4.3) - framework: >= netstandard10
-      Microsoft.NETCore.Platforms (>= 1.1) - framework: dnxcore50, netstandard10, netstandard12, netstandard13, >= netstandard15
-      Microsoft.NETCore.Targets (>= 1.1) - framework: dnxcore50, netstandard10, netstandard12, netstandard13, >= netstandard15
-    System.Runtime.InteropServices.WindowsRuntime (4.3) - framework: >= netstandard10
-      System.Runtime (>= 4.3) - framework: dnxcore50, >= netstandard10
+    System.Runtime (4.3) - restriction: >= netstandard1.0
+      Microsoft.NETCore.Platforms (>= 1.1) - restriction: || (== dnxcore50) (== netstandard1.0) (== netstandard1.2) (== netstandard1.3) (>= netstandard1.5)
+      Microsoft.NETCore.Targets (>= 1.1) - restriction: || (== dnxcore50) (== netstandard1.0) (== netstandard1.2) (== netstandard1.3) (>= netstandard1.5)
+    System.Runtime.InteropServices.WindowsRuntime (4.3) - restriction: >= netstandard1.0
+      System.Runtime (>= 4.3) - restriction: || (== dnxcore50) (>= netstandard1.0)
 
 GROUP Test
 NUGET

@@ -20,7 +20,7 @@ type OutputArtefacts =
         | Partial artefacts -> if outRef < artefacts.Length then artefacts.[outRef] else None
 
 [<AbstractClass>]
-type Method(id: MethodId, inputs: Type list, outputs: Type list) =
+type ExecutableMethod(id: MethodId, inputs: Type list, outputs: Type list) =
 
     interface IVertex with
         member x.Inputs = inputs
@@ -29,14 +29,14 @@ type Method(id: MethodId, inputs: Type list, outputs: Type list) =
     interface IComparable with
         member x.CompareTo(yobj: obj): int = 
             match yobj with
-            | :? Method as y -> id.CompareTo y.Id
+            | :? ExecutableMethod as y -> id.CompareTo y.Id
             | _ -> invalidArg "yobj" "Cannot compare values of different types"
 
     member x.Id = id
 
     override x.Equals(yobj: obj) = 
         match yobj with
-        | :? Method as y -> x.Id = y.Id
+        | :? ExecutableMethod as y -> x.Id = y.Id
         | _ -> false
 
     override x.GetHashCode() = 
@@ -79,7 +79,7 @@ module Artefacts =
     open Angara.Option
     open Angara.Data
     
-    let internal tryGetOutput (edge:Edge<Method>) (i:VertexIndex) (state:VerticesState<Method,VertexState<MethodOutput>>) : Artefact option =
+    let internal tryGetOutput (edge:Edge<'m>) (i:VertexIndex) (state:VerticesState<'m,VertexState<MethodOutput>>) : Artefact option =
         opt {
             let! vs = state |> Map.tryFind edge.Source
             let! vis = vs |> MdMap.tryFind i
@@ -141,7 +141,7 @@ module Artefacts =
     /// If element is Item, there is a single artefact for the input.
     /// If element is Array, there are a number of artefacts that altogether is an input (i.e. `reduce` or `collect` input edges).
     /// </returns>
-    let getInputs (state: VerticesState<Method,VertexState<_>>, graph: FlowGraph<Method>) (v:Method, i:VertexIndex) : Input[] =
+    let getInputs (state: VerticesState<'m,VertexState<_>>, graph: FlowGraph<'m>) (v:'m, i:VertexIndex) : Input[] =
         let inputTypes = (v :> IVertex).Inputs
         let inputs = Array.init inputTypes.Length (fun i -> if inputTypes.[i].IsArray then Input.Array (Array.empty) else Input.NotAvailable)
         graph.Structure.InEdges v
@@ -313,14 +313,14 @@ and [<Class>] ThreadPoolScheduler() =
                 raise ex), CancellationToken.None, Tasks.TaskCreationOptions.LongRunning, scheduler) |> ignore
 
 [<Sealed>]
-type Runtime (source:IObservable<State<Method,MethodOutput> * RuntimeAction<Method> list>, scheduler : Scheduler) =
-    let messages = ObservableSource<Message<Method,MethodOutput>>()
-    let cancels = Dictionary<Method*VertexIndex,CancellationTokenSource>()
-    let progressReported = ObservableSource<Method*VertexIndex*float>()
+type Runtime<'m when 'm:>ExecutableMethod and 'm:comparison> (source:IObservable<State<'m,MethodOutput> * RuntimeAction<'m> list>, scheduler : Scheduler) =
+    let messages = ObservableSource<Message<'m,MethodOutput>>()
+    let cancels = Dictionary<'m*VertexIndex,CancellationTokenSource>()
+    let progressReported = ObservableSource<'m*VertexIndex*float>()
 
-    let progress (v:Method) (i:VertexIndex) : IProgress<float> = new Progress<Method>(v, i, progressReported) :> IProgress<float>
+    let progress (v:'m) (i:VertexIndex) : IProgress<float> = new Progress<'m>(v, i, progressReported) :> IProgress<float>
     
-    let cancel (v:Method, i:VertexIndex) (cancels:Dictionary<Method*VertexIndex,CancellationTokenSource>) = 
+    let cancel (v:'m, i:VertexIndex) (cancels:Dictionary<'m*VertexIndex,CancellationTokenSource>) = 
         match cancels.ContainsKey (v,i) with
         | true -> 
             let cts = cancels.[v,i]
@@ -329,7 +329,7 @@ type Runtime (source:IObservable<State<Method,MethodOutput> * RuntimeAction<Meth
             cancels.Remove(v,i) |> ignore
         | _ -> ()
 
-    let cancelAll v (cancels:Dictionary<Method*VertexIndex,CancellationTokenSource>) = 
+    let cancelAll v (cancels:Dictionary<'m*VertexIndex,CancellationTokenSource>) = 
         let indices = cancels |> Seq.choose(fun k -> let u,i = k.Key in if u = v then Some(i) else None) |> Seq.toArray
         indices |> Seq.iter (fun i -> cancel (v,i) cancels)
 
@@ -373,7 +373,7 @@ type Runtime (source:IObservable<State<Method,MethodOutput> * RuntimeAction<Meth
             | NotAvailable -> failwith "Input artefacts for the method to execute are not available"
         Seq.zip inputs inpTypes |> Seq.map restore |> List.ofSeq
 
-    let buildEvaluation (v:Method,index,time,state:State<Method,MethodOutput>) (cts:CancellationTokenSource) (doContinue:bool) = fun() ->
+    let buildEvaluation (v:'m,index,time,state:State<'m,MethodOutput>) (cts:CancellationTokenSource) (doContinue:bool) = fun() ->
         Trace.Runtime.TraceEvent(Event.Start, RuntimeId.Evaluation, sprintf "Starting evaluation of %O.[%A]" v index)
                 
         let cancellationToken = cts.Token
@@ -405,7 +405,7 @@ type Runtime (source:IObservable<State<Method,MethodOutput> * RuntimeAction<Meth
             ex |> postFailure v index time
 
 
-    let performAction (state : State<Method,MethodOutput>) (action : RuntimeAction<Method>) = 
+    let performAction (state : State<'m,MethodOutput>) (action : RuntimeAction<'m>) = 
         match action with
         | Delay (v,slice,time) -> 
             cancel (v,slice) cancels
@@ -470,7 +470,7 @@ module internal Helpers =
 open Helpers
 
 [<Class>]
-type Engine(initialState : State<Method, MethodOutput>, scheduler:Scheduler) =
+type Engine<'m when 'm:>ExecutableMethod and 'm:comparison>(initialState : State<'m, MethodOutput>, scheduler:Scheduler) =
     
     let messages = ObservableSource()
 
@@ -481,7 +481,7 @@ type Engine(initialState : State<Method, MethodOutput>, scheduler:Scheduler) =
             
     let stateMachine = Angara.States.StateMachine.CreateSuspended messages.AsObservable initialState
     let runtimeActions = stateMachine.Changes |> Observable.map (fun update -> update.State, Analysis.analyzeChanges update)
-    let runtime = new Runtime(runtimeActions, scheduler)
+    let runtime = new Runtime<'m>(runtimeActions, scheduler)
 
     let mutable sbs = null
 
@@ -494,7 +494,7 @@ type Engine(initialState : State<Method, MethodOutput>, scheduler:Scheduler) =
 
     member x.Start() = stateMachine.Start()
 
-    member x.Post(m:Messages.Message<Method,MethodOutput>) =
+    member x.Post(m:Messages.Message<'m,MethodOutput>) =
         messages.Next m
 
     interface IDisposable with
@@ -503,3 +503,75 @@ type Engine(initialState : State<Method, MethodOutput>, scheduler:Scheduler) =
             (stateMachine :> IDisposable).Dispose()
             (runtime :> IDisposable).Dispose()
 
+
+module Control =
+    
+    open System.Reactive.Linq
+    open Angara.Data
+
+    let internal vectorToArtefact (vector:MdMap<int, Artefact>, rank:int, artType: System.Type) : Artefact = 
+        if rank = 0 then vector.AsScalar()
+        else 
+            let objArr = vector |> MdMap.toJaggedArray
+            let arrTypes = Seq.unfold(fun (r : int, t : System.Type) ->
+                if r > 0 then Some(t, (r-1, t.MakeArrayType())) else None) (rank, artType) |> Seq.toList
+
+            let rec cast (eltType:System.Type) (r:int) (arr:obj[]) : System.Array =
+                let n = arr.Length
+                if r = 1 then
+                    let tarr = System.Array.CreateInstance(eltType, n)
+                    if n > 0 then arr.CopyTo(tarr, 0)
+                    tarr
+                else             
+                    let tarr = System.Array.CreateInstance(arrTypes.[r-1], n)
+                    for i = 0 to n-1 do tarr.SetValue(cast eltType (r-1) (arr.[i]:?>obj[]), i)
+                    tarr
+            upcast cast artType rank objArr
+
+    let internal extractOutput<'m when 'm:>ExecutableMethod and 'm:comparison> (vertex:'m) (outRef: OutputRef) (state:State<'m,MethodOutput>) = 
+        let rank = Angara.Graph.vertexRank vertex state.Graph.Structure
+        let artType = (vertex :> IVertex).Outputs.[outRef]
+        let vs = state.Vertices.[vertex]                    
+        let md = vs |> MdMap.map (fun vis -> vis.Data.Value.Artefacts.TryGet(outRef).Value)
+        vectorToArtefact (md, rank, artType)
+
+
+    let pickFinal<'m when 'm:>ExecutableMethod and 'm:comparison> states =
+        let isFinal (update : StateUpdate<'m,MethodOutput>) =
+            let failedMethods = 
+                update.State.Vertices 
+                |> Map.toSeq 
+                |> Seq.map(fun (_,vs) -> 
+                    vs 
+                    |> Angara.Data.MdMap.toSeq
+                    |> Seq.choose(fun (_, vis) ->
+                        match vis.Status with
+                        | VertexStatus.Incomplete (IncompleteReason.ExecutionFailed e) -> Some e
+                        | _ -> None))                  
+                |> Seq.concat
+                |> Seq.toList
+            match failedMethods with
+            | [] ->
+                update.State.Vertices 
+                |> Map.toSeq
+                |> Seq.forall(fun (_,vs) -> 
+                    vs 
+                    |> Angara.Data.MdMap.toSeq
+                    |> Seq.forall(fun (_, vis) ->
+                        match vis.Status with
+                        | VertexStatus.Final _ -> true
+                        | _ -> false))
+            | errors -> failwithf "Some methods failed: %A" errors
+
+        (Observable.FirstAsync(states, new Func<StateUpdate<'m,MethodOutput>, bool>(isFinal)) |> Observable.map(fun update -> update.State)).GetAwaiter()
+    
+
+    let outputScalar<'m,'a when 'm:>ExecutableMethod and 'm:comparison> (m:'m, outRef:OutputRef) (state:State<'m,MethodOutput>) : 'a =
+        let output = extractOutput m outRef state
+        unbox output
+
+    let runToFinal<'m when 'm:>ExecutableMethod and 'm:comparison>(state:State<'m, MethodOutput>) =
+        use engine = new Engine<'m>(state, Scheduler.ThreadPool())
+        let final = pickFinal engine.Changes   
+        engine.Start()
+        final.GetResult()

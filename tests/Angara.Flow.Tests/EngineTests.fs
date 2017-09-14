@@ -12,16 +12,17 @@ open System
 open System.Reactive.Linq
 
 
-type Dag = DirectedAcyclicGraph<Method, Edge<Method>>
+type Dag = DirectedAcyclicGraph<ExecutableMethod, Edge<ExecutableMethod>>
+type Engine = Engine<ExecutableMethod>
 
 type MethodMakeValue<'a>(value: 'a) =
-    inherit Method(System.Guid.NewGuid(), [], [typeof<'a>])
+    inherit ExecutableMethod(System.Guid.NewGuid(), [], [typeof<'a>])
 
     override x.Execute(_, _) =
         seq{ yield [box value], null }
 
 type MethodOp<'a,'b>(f: 'a->'b) =
-    inherit Method(System.Guid.NewGuid(), [typeof<'a>], [typeof<'b>])
+    inherit ExecutableMethod(System.Guid.NewGuid(), [typeof<'a>], [typeof<'b>])
 
     override x.Execute(args, _) =
         match args with
@@ -31,7 +32,7 @@ type MethodOp<'a,'b>(f: 'a->'b) =
         | _ -> failwith "Incorrect number of arguments"
 
 type MethodMakeValueIter<'a>(values: 'a seq) =
-    inherit Method(System.Guid.NewGuid(), [], [typeof<'a>])
+    inherit ExecutableMethod(System.Guid.NewGuid(), [], [typeof<'a>])
 
     override x.Execute(_, checkpoint) =
         let iters, i0 = 
@@ -39,46 +40,7 @@ type MethodMakeValueIter<'a>(values: 'a seq) =
             | Some i -> values |> Seq.skip (unbox i), unbox i
             | None -> values, 0
         iters |> Seq.mapi(fun i v -> [unbox v], unbox (i+i0))
-
-
-let pickFinal states =
-    let isFinal (update : StateUpdate<Method,MethodOutput>) =
-        let failedMethods = 
-            update.State.Vertices 
-            |> Map.toSeq 
-            |> Seq.map(fun (_,vs) -> 
-                vs 
-                |> Angara.Data.MdMap.toSeq
-                |> Seq.choose(fun (_, vis) ->
-                    match vis.Status with
-                    | VertexStatus.Incomplete (IncompleteReason.ExecutionFailed e) -> Some e
-                    | _ -> None))                  
-            |> Seq.concat
-            |> Seq.toList
-        match failedMethods with
-        | [] ->
-            update.State.Vertices 
-            |> Map.toSeq
-            |> Seq.forall(fun (_,vs) -> 
-                vs 
-                |> Angara.Data.MdMap.toSeq
-                |> Seq.forall(fun (_, vis) ->
-                    match vis.Status with
-                    | VertexStatus.Final _ -> true
-                    | _ -> false))
-        | errors -> failwithf "Some methods failed: %A" errors
-
-    (Observable.FirstAsync(states, new Func<StateUpdate<Method,MethodOutput>, bool>(isFinal)) |> Observable.map(fun update -> update.State)).GetAwaiter()
-    
-
-let output (m:Method, output:OutputRef) (state:State<Method,MethodOutput>) =
-    unbox (state.Vertices.[m].AsScalar().Data.Value.Artefacts.TryGet(output).Value)
-
-let runToCompletion state =
-    use engine = new Engine(state, Scheduler.ThreadPool())
-    let final = pickFinal engine.Changes   
-    engine.Start()
-    final.GetResult()
+        
 
 //--------------------------------------------------------------------------------------------------------------------
 // Tests
@@ -86,7 +48,7 @@ let runToCompletion state =
 
 [<Test; Category("CI")>]
 let ``Engine executes a flow containing a single method`` () =
-    let methodOne : Method = upcast MethodMakeValue System.Math.PI
+    let methodOne : ExecutableMethod = upcast MethodMakeValue System.Math.PI
     let graph = 
         FlowGraph.empty
         |> FlowGraph.add methodOne
@@ -102,15 +64,15 @@ let ``Engine executes a flow containing a single method`` () =
           Vertices = vertices          
         }
     
-    let s = runToCompletion state
-    let result : float = s |> output (methodOne,0)
+    let s = Control.runToFinal state
+    let result : float = s |> Control.outputScalar (methodOne,0)
     Assert.AreEqual(System.Math.PI, result, "Execution result")
 
 
 [<Test; Category("CI")>]
 let ``Engine executes a flow of two chained methods`` () =
-    let methodOne : Method = upcast MethodMakeValue<float> System.Math.PI
-    let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
+    let methodOne : ExecutableMethod = upcast MethodMakeValue<float> System.Math.PI
+    let methodInc : ExecutableMethod = upcast MethodOp<float,float> (fun a -> a + 1.0)
 
     let graph = 
         FlowGraph.empty
@@ -124,8 +86,8 @@ let ``Engine executes a flow of two chained methods`` () =
           Vertices = VerticesState []           
         }
         
-    let s = runToCompletion state
-    let result : float = s |> output (methodInc,0)
+    let s = Control.runToFinal state
+    let result : float = s |> Control.outputScalar (methodInc,0)
     Assert.AreEqual(System.Math.PI + 1.0, result, "Execution result")
 
 
@@ -134,7 +96,7 @@ let ``Engine executes a flow of two chained methods`` () =
 let ``Engine executes an iterative method and we can see intermediate outputs`` () =
     let pi = System.Math.PI
     let iters = [ for i in 0..3 -> float(i)/3.0 * pi ]
-    let methodOne : Method = upcast MethodMakeValueIter<float> iters
+    let methodOne : ExecutableMethod = upcast MethodMakeValueIter<float> iters
 
     let graph = 
         FlowGraph.empty
@@ -169,16 +131,16 @@ let ``Engine executes a flow with vector methods`` () =
     let pi = System.Math.PI    
     let input = [| for k in 0..3 -> float(k)*pi |]
 
-    let methodMakeArr : Method = upcast MethodMakeValue<float[]> input
-    let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
-    let methodSum : Method = upcast MethodOp<float[],float> Array.sum
+    let methodMakeArr : ExecutableMethod = upcast MethodMakeValue<float[]> input
+    let methodInc : ExecutableMethod = upcast MethodOp<float,float> (fun a -> a + 1.0)
+    let methodSum : ExecutableMethod = upcast MethodOp<float[],float> Array.sum
 
     let graph = 
         FlowGraph.empty
         |> FlowGraph.add methodMakeArr
         |> FlowGraph.add methodInc
         |> FlowGraph.add methodSum
-        // An output of type `float[]` is connected to an input of type `float`,
+        // An Control.outputScalar of type `float[]` is connected to an input of type `float`,
         // so the latter is vectorized to be called for each of the input element.
         |> FlowGraph.connect (methodMakeArr, 0) (methodInc, 0)
         // A vector of float values is connected to an input of type `float[]`, 
@@ -191,8 +153,8 @@ let ``Engine executes a flow with vector methods`` () =
           Vertices = VerticesState []           
         }
         
-    let s = runToCompletion state
-    let result : float = s |> output (methodSum,0)
+    let s = Control.runToFinal state
+    let result : float = s |> Control.outputScalar (methodSum,0)
     Assert.AreEqual(input |> Array.map (fun v -> v+1.0) |> Array.sum, result, "Execution result")
 
 
@@ -204,9 +166,9 @@ let ``Engine executes a flow with vector of length zero`` () =
     // Thus the final sink method is called for an empty array and produces a default value, 0.
     let input = Array.empty
 
-    let methodMakeArr : Method = upcast MethodMakeValue<float[]> input
-    let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
-    let methodSum : Method = upcast MethodOp<float[],float> (fun arr -> if arr.Length = 0 then 0.0 else Array.sum arr)
+    let methodMakeArr : ExecutableMethod = upcast MethodMakeValue<float[]> input
+    let methodInc : ExecutableMethod = upcast MethodOp<float,float> (fun a -> a + 1.0)
+    let methodSum : ExecutableMethod = upcast MethodOp<float[],float> (fun arr -> if arr.Length = 0 then 0.0 else Array.sum arr)
 
     let graph = 
         FlowGraph.empty
@@ -222,14 +184,14 @@ let ``Engine executes a flow with vector of length zero`` () =
           Vertices = VerticesState []          
         }
         
-    let s = runToCompletion state
-    let result : float = s |> output (methodSum,0)
+    let s = Control.runToFinal state
+    let result : float = s |> Control.outputScalar (methodSum,0)
     Assert.AreEqual(0.0, result, "Execution result")
 
 [<Test; Category("CI")>]
 let ``Engine allows to pause an executing iterative method``() =
     let iters = Seq.initInfinite (fun i -> System.Threading.Thread.Sleep(10); float(i))
-    let methodIter : Method = upcast MethodMakeValueIter<float> iters
+    let methodIter : ExecutableMethod = upcast MethodMakeValueIter<float> iters
 
     let graph = 
         FlowGraph.empty
@@ -260,13 +222,13 @@ let ``Engine allows to pause an executing iterative method``() =
 
     let s = finish.GetResult()
 
-    Assert.LessOrEqual(1.0, s.State |> output (methodIter, 0), "Output")
+    Assert.LessOrEqual(1.0, s.State |> Control.outputScalar (methodIter, 0), "Output")
 
 [<Test; Category("CI")>]
 let ``Engine allows to continue a paused iterative method and a checkpoint enables to start from last iteration`` () =
     let iters = [| for i in 0..10 -> float(i) * System.Math.PI |]
-    let methodIter : Method = upcast MethodMakeValueIter<float> iters
-    let methodInc : Method = upcast MethodOp<float,float> (fun a -> a + 1.0)
+    let methodIter : ExecutableMethod = upcast MethodMakeValueIter<float> iters
+    let methodInc : ExecutableMethod = upcast MethodOp<float,float> (fun a -> a + 1.0)
 
     let graph =
         FlowGraph.empty
@@ -284,7 +246,7 @@ let ``Engine allows to continue a paused iterative method and a checkpoint enabl
         }
 
     use engine = new Engine(state, Scheduler.ThreadPool())
-    let final = pickFinal engine.Changes 
+    let final = Control.pickFinal engine.Changes 
     let iterCount = 
        engine.Changes
         .TakeWhile(fun update -> // We stop watching for changes when the `methodIter` is completed.
@@ -295,8 +257,8 @@ let ``Engine allows to continue a paused iterative method and a checkpoint enabl
             match update.Changes |> Map.tryFind methodIter with
             | Some (Modified(_,oldvs,vs,_)) ->
                 match oldvs.AsScalar().Status,vs.AsScalar().Status with
-                | VertexStatus.Paused _, VertexStatus.Continues _ -> false // this transition indicates that the method is started but not yet produced any output
-                | VertexStatus.Continues _, VertexStatus.Continues _ -> true // indicates that new iteration output produced
+                | VertexStatus.Paused _, VertexStatus.Continues _ -> false // this transition indicates that the method is started but not yet produced any Control.outputScalar
+                | VertexStatus.Continues _, VertexStatus.Continues _ -> true // indicates that new iteration Control.outputScalar produced
                 | _ -> false
             | _ -> false)
         .GetAwaiter()
@@ -310,7 +272,7 @@ let ``Engine allows to continue a paused iterative method and a checkpoint enabl
 
     let s = final.GetResult()
 
-    let result : float = s |> output (methodInc,0)
+    let result : float = s |> Control.outputScalar (methodInc,0)
     Assert.AreEqual(Array.last iters + 1.0, result, "Execution result")
     Assert.AreEqual(iters.Length - k, iterCount.GetResult(),  "Number of iterations performed")
 
