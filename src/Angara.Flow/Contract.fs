@@ -36,8 +36,7 @@ type FunctionMethod(id: MethodId, contract: MethodContract, func: Artefact list 
     inherit Method(id, contract)
 
     override x.Execute (inputs: Artefact list, chk: MethodCheckpoint option) : (Artefact list * MethodCheckpoint) seq =
-        let result = func(inputs, chk) |> Seq.toArray
-        result |> Seq.ofArray
+        func(inputs, chk)
 
 module BasicMethods =
     let value_ContractId = "value_"
