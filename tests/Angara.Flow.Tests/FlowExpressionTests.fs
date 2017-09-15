@@ -3,8 +3,6 @@
 open NUnit.Framework
 
 open System
-open System.Threading
-open System.Reactive.Linq
 open Angara
 open Angara.MethodDecl
 
@@ -34,6 +32,7 @@ let ``Flow expression returns unit``() =
     let s = build f
     Assert.AreEqual(1, s.Graph.Structure.Vertices.Count, "Number of methods")
 
+
 [<Test; Category("CI")>]
 [<Timeout(2000)>]
 let ``Increment an integer number``() =
@@ -49,3 +48,20 @@ let ``Increment an integer number``() =
     let y = run f
     Assert.AreEqual(4, y, "Incremented value")
 
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Iterative method with multiple outputs``() =
+    let f = (decl (fun n ->
+        let rec r(k) = seq { 
+            yield k
+            if k < n then yield! r(k+1)
+        }
+        r 0) "iter") |> arg "n" |> iter |> result1 "out"
+    
+    let f = flow {
+        let! r = f(value 3)
+        return r
+    }
+
+    Assert.AreEqual(3, run f)

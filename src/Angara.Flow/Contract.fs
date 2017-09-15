@@ -39,10 +39,11 @@ type FunctionMethod(id: MethodId, contract: MethodContract, func: Artefact list 
     override x.Execute (inputs: Artefact list, chk: MethodCheckpoint option) : (Artefact list * MethodCheckpoint) seq =
         func(inputs, chk) 
 
-module Contracts =
+module BasicMethods =
+    let value_ContractId = "value_"
     
     let createMakeValueUntyped (v:obj) (t:Type) = 
-        let valueId = "value_" + t.FullName
+        let valueId = value_ContractId + t.FullName
         FunctionMethod(
             Guid.NewGuid(), 
             { Id = valueId

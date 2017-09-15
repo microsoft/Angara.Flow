@@ -65,24 +65,26 @@ let private makeAny
             let a_inputs = [for i in 0..(List.length inputs - 1) -> LE.Convert(LE.ArrayAccess(p_inputs,LE.Constant(i)),inputs.[i].Type) :> LE]                                        
             let call = LE.Call(LE.Constant(compute),invoke,a_inputs)
             let bf : Func<obj[], 'compute_result> = LE.Lambda<Func<obj[], 'compute_result>>(call, p_inputs).Compile()
-            let smplFun = fun (margs,_:Execution.MethodCheckpoint option) -> Seq.singleton ([bf.Invoke(margs |> List.toArray) :> obj], null)
+            let smplFun = fun (margs,_:Execution.MethodCheckpoint option) -> Seq.singleton (bf.Invoke(margs |> List.toArray) |> unwrap_outputs |> Array.toList, null)
             smplFun
 
 
-        //| IterativeBehaviour ->
-        //    let fsharpfunc = compute.GetType()
-        //    let invoke = fsharpfunc.GetMethods() |> Array.find ( fun mi ->
-        //        (mi.ReturnType = typeof<'compute_result seq>) &&
-        //            (let pp = mi.GetParameters()
-        //            (pp.Length = inputs.Length) && 
-        //            (Seq.forall2 (fun (p:System.Reflection.ParameterInfo) (i:InputContract) -> 
-        //                p.ParameterType = i.Type) pp inputs))
-        //        )
-        //    let p_inputs = LE.Parameter(typeof<obj[]>)                                        
-        //    let a_inputs = [for i in 0..(List.length inputs - 1) -> LE.Convert(LE.ArrayAccess(p_inputs,LE.Constant(i)),inputs.[i].Type) :> LE]                                        
-        //    let call = LE.Call(LE.Constant(compute),invoke,a_inputs)
-        //    let bf = LE.Lambda<System.Func<obj[], 'compute_result seq>>(call, p_inputs).Compile()
-        //    Angara.Execution.Behavior.IterativeFunction(fun margs -> bf.Invoke(margs) |> Seq.map unwrap_outputs)
+        | IterativeBehaviour ->
+            let fsharpfunc = compute.GetType()
+            let invoke = fsharpfunc.GetMethods() |> Array.find ( fun mi ->
+                (mi.ReturnType = typeof<'compute_result seq>) &&
+                    (let pp = mi.GetParameters()
+                    (pp.Length = inputs.Length) && 
+                    (Seq.forall2 (fun (p:System.Reflection.ParameterInfo) (i:InputContract) -> 
+                        p.ParameterType = i.Type) pp inputs))
+                )
+            let p_inputs = LE.Parameter(typeof<obj[]>)                                        
+            let a_inputs = [for i in 0..(List.length inputs - 1) -> LE.Convert(LE.ArrayAccess(p_inputs,LE.Constant(i)),inputs.[i].Type) :> LE]                                        
+            let call = LE.Call(LE.Constant(compute),invoke,a_inputs)
+            let bf = LE.Lambda<System.Func<obj[], 'compute_result seq>>(call, p_inputs).Compile()
+            let iterFun = fun (margs,_:Execution.MethodCheckpoint option) -> bf.Invoke(margs |> List.toArray) |> Seq.map(fun art -> art |> unwrap_outputs |> Array.toList, null)
+            iterFun
+
         //| ResumableBehaviour ->
         //    let fsharpfunc = compute.GetType()
         //    let invoke = fsharpfunc.GetMethods() |> Array.find ( fun mi ->
