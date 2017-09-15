@@ -16,7 +16,7 @@ type OutputContract =
       Name : string }
 
 [<ReflectedDefinition>]
-[<System.Diagnostics.DebuggerDisplay("Contract {Description.DisplayName}")>]
+[<System.Diagnostics.DebuggerDisplay("Contract {Id} {DisplayName}")>]
 type MethodContract = 
     { Id : string
       TypeArgs : System.Type list
@@ -27,6 +27,7 @@ type MethodContract =
     }
 
 [<AbstractClass>]
+[<System.Diagnostics.DebuggerDisplay("Method {Contract.Id} {Id}")>]
 type Method(id: MethodId, contract: MethodContract) =
     inherit ExecutableMethod(id, contract.Inputs |> List.map(fun c -> c.Type), contract.Outputs |> List.map(fun c -> c.Type))
 

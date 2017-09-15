@@ -6,11 +6,11 @@ open Angara.FlowExpression
 type LE = System.Linq.Expressions.Expression
 
 /// data necessary to generate a primitive flow expression
-type FEData = {m:Method; args:UntypedArtefactExpression list} // collected list of arguments from 
+type FEData = {factory:Guid->Method; args:UntypedArtefactExpression list} // collected list of arguments from 
 
 /// the final stage of generation of a primitive flow expression given the collected flow expression data 
-let private methd {m=m; args=arglist} =
-    let m = MethodExpression(m, List.rev arglist) 
+let private methd {factory=factory; args=arglist} =
+    let m = MethodExpression(factory(Guid.NewGuid()), List.rev arglist) 
     define([m], [|for i in 0..List.length m.Method.Contract.Outputs - 1 -> Single{MethodExpr=m; Index=i}|])
 
 type BehaviourTag = SimpleBehaviour | IterativeBehaviour | ResumableBehaviour | CompoundBehaviour
@@ -107,8 +107,7 @@ let private makeAny
         | _ ->
             failwith "not implemented"
 
-    let method = FunctionMethod(Guid.NewGuid(), contract, mfunc)
-    factory methd {m=method; args=[]}
+    factory methd {factory = (fun id -> upcast FunctionMethod(id, contract, mfunc)); args = []}
 
 /// Declare a simple method producing one output with a given 'method id'. The 'method id' is by convention a unique combination of two words.
 let result1

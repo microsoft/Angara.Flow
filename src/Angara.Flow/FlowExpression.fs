@@ -11,8 +11,12 @@ module FlowExpression =
     /// Method representation in a flow definition such that 
     /// (i) it keeps incoming dependencies;
     /// (ii) it allows to instantiate a method.
-    [<DebuggerDisplayAttribute("{Contract.Description.DisplayName}")>]
+    [<DebuggerDisplayAttribute("{Method.Contract.DisplayName} {Id}")>]
     type MethodExpression(m: Method, inputs: UntypedArtefactExpression list) =
+
+        do
+            Trace.WriteLine("ME");
+
         member x.Id : Guid = m.Id
 
         /// Returns an ordered list of other method's outputs that are connected as inputs to this method.
@@ -23,7 +27,7 @@ module FlowExpression =
         
         override x.Equals other =
             match other with
-            | :? Method as y -> y.Id = x.Id
+            | :? MethodExpression as y -> y.Id = x.Id
             | _ -> false
         override x.GetHashCode() = x.Id.GetHashCode()
         override x.ToString() = 
@@ -39,7 +43,7 @@ module FlowExpression =
         interface System.IComparable with
           member x.CompareTo yobj = 
               match yobj with
-              | :? Method as y -> x.Id.CompareTo(y.Id)
+              | :? MethodExpression as y -> x.Id.CompareTo(y.Id)
               | _ -> invalidArg "yobj" "cannot compare values of different types"
 
     and /// A method output.
@@ -649,3 +653,26 @@ module FlowExpression =
 
         let m = findResultMethods def final.Graph 
         final |> Control.outputScalar m.[0] 
+        
+    let run2 (def:FlowExpression<ArtefactExpression<'a>*ArtefactExpression<'b>>) : 'a*'b = 
+        assert(2 = def.Results.Length)
+
+        let initial = build def
+        let final = Control.runToFinal initial
+
+        let m = findResultMethods def final.Graph         
+        let a = final |> Control.outputScalar m.[0] 
+        let b = final |> Control.outputScalar m.[1] 
+        a,b
+
+    let run3 (def:FlowExpression<ArtefactExpression<'a>*ArtefactExpression<'b>*ArtefactExpression<'c>>) : 'a*'b*'c = 
+        assert(3 = def.Results.Length)
+
+        let initial = build def
+        let final = Control.runToFinal initial
+
+        let m = findResultMethods def final.Graph         
+        let a = final |> Control.outputScalar m.[0] 
+        let b = final |> Control.outputScalar m.[1] 
+        let c = final |> Control.outputScalar m.[2] 
+        a,b,c

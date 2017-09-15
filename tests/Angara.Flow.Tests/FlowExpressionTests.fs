@@ -7,6 +7,7 @@ open Angara
 open Angara.MethodDecl
 
 let inc = decl (fun x -> x + 1) "inc integer" |> arg "x" |> result1 "out"
+let sum = decl (fun (vals: int[]) -> Array.fold (+) 0 vals) "summarize values" |> arg "values" |> result1 "sum"
 
 [<Test; Category("CI")>]
 [<Timeout(2000)>]
@@ -52,7 +53,7 @@ let ``Increment an integer number``() =
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
 let ``Iterative method with multiple outputs``() =
-    let f = (decl (fun n ->
+    let fiter = (decl (fun n ->
         let rec r(k) = seq { 
             yield k
             if k < n then yield! r(k+1)
@@ -60,8 +61,25 @@ let ``Iterative method with multiple outputs``() =
         r 0) "iter") |> arg "n" |> iter |> result1 "out"
     
     let f = flow {
-        let! r = f(value 3)
+        let! r = fiter(value 3)
         return r
     }
 
     Assert.AreEqual(3, run f)
+
+ 
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Array of flows to array of artefacts``() =
+    let f = flow {
+        let! a = [|
+            for i = 1 to 3 do yield flow {
+                let! x = inc (value i)
+                return x
+            }
+        |]
+        let! s = sum (collect a)
+        return s
+    }
+
+    Assert.AreEqual(9, run f)
