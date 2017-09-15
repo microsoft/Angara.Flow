@@ -107,3 +107,7 @@ module Control =
 
     /// Starts the flow from the given flow state blocking until the final state is reached and then returns that state.
     val runToFinal<'m when 'm:>ExecutableMethod and 'm:comparison> : State<'m,MethodOutput> -> State<'m,MethodOutput>
+
+    type FlowFailedException =
+        new : exn seq -> FlowFailedException
+        inherit System.AggregateException

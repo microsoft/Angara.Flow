@@ -509,6 +509,9 @@ module Control =
     open System.Reactive.Linq
     open Angara.Data
 
+    type FlowFailedException(errors : exn seq) =        
+        inherit System.AggregateException("Some methods of the flow failed", errors |> Seq.toArray)
+
     let internal vectorToArtefact (vector:MdMap<int, Artefact>, rank:int, artType: System.Type) : Artefact = 
         if rank = 0 then vector.AsScalar()
         else 
@@ -561,7 +564,7 @@ module Control =
                         match vis.Status with
                         | VertexStatus.Final _ -> true
                         | _ -> false))
-            | errors -> failwithf "Some methods failed: %A" errors
+            | errors -> raise (new FlowFailedException(errors))
 
         (Observable.FirstAsync(states, new Func<StateUpdate<'m,MethodOutput>, bool>(isFinal)) |> Observable.map(fun update -> update.State)).GetAwaiter()
     

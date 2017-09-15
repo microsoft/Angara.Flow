@@ -14,9 +14,6 @@ module FlowExpression =
     [<DebuggerDisplayAttribute("{Method.Contract.DisplayName} {Id}")>]
     type MethodExpression(m: Method, inputs: UntypedArtefactExpression list) =
 
-        do
-            Trace.WriteLine("ME");
-
         member x.Id : Guid = m.Id
 
         /// Returns an ordered list of other method's outputs that are connected as inputs to this method.
