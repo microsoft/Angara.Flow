@@ -294,3 +294,313 @@ let ``Scatter collected array``() =
     }
 
     Assert.AreEqual(5, run w, "Sum")
+
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Closure in a nested scatter body``() =
+    let w = flow {
+        let! n = makeValue 5
+        let! s = foreach(value [| 0; 1; 2 |], fun v -> flow {
+            let! u = inc v
+            let! r2 = range u
+            let! s2 = foreach(r2, fun w -> flow {
+                let! a = add w n // <== "n"
+                return! add a v  // <== "v"
+            })
+            let! z = sum s2
+            return! add z n // <== "n"
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(57, run w, "Sum")
+
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Double scatter of 2d-array``() =
+    let w = flow {
+        let! a = makeValue[| [| 0; 1 |]; [| 2; 3 |] |]
+
+        let! s = foreach(a, fun b -> flow {
+            let! r = foreach(b, fun c -> flow {
+                return! inc c
+            })
+            return! sum r
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(10, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Triple scatter of 3d-array``() =
+    let w = flow {
+        let! a = makeValue[| [| [| 0; 1 |]; [| 2; 3 |] |]; [| [| 4; 5 |] |] |]
+
+        let! s = foreach(a, fun b -> flow {
+            let! r = foreach(b, fun c -> flow {
+                let! t = foreach(c, fun d -> flow {
+                    return! inc d
+                })
+                return! sum t
+            })
+            return! sum r
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(21, run w, "Sum")
+
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Collecting scattered value``() =
+    let w = flow {
+        let! s = foreach(value[| 0; 1; 2 |], fun v -> flow {
+            let! s = sum(collect[|v; value 1|])
+            return s
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(6, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Returning scattered value``() =
+    let w = flow {
+        let! s = foreach(value[| 0; 1; 2 |], fun v -> flow {
+            return v
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(3, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Scattering collected scattered value``() =
+    let w = flow {
+        let! s = foreach(value[| 0; 1; 2 |], fun v -> flow {
+            let! s = foreach(collect[| value 1; v |], fun w -> flow {
+                return! inc w
+            })
+            return! sum s
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(12, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Scatter body doesn't depend on scattered artefact``() =
+    let w = flow {
+        let! n = makeValue 5
+        let! s = foreach(value[|0;1;2|], fun _ -> flow {
+            return! inc n
+        })
+        return! sum s
+    }
+    
+    Assert.AreEqual(18, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Scatter body doesn't depend on scattered artefact and has no inputs``() =
+    let w = flow {
+        let! s = foreach(value[|0;1;2|], fun _ -> flow {
+            return! makeValue 3
+        })
+        return s
+    }
+    
+    Assert.AreEqual([|3;3;3|], run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Closure in a nested scatter body using 'collect'``() =
+    let w = flow {
+        let! n = makeValue 5
+        let! r = makeValue [| 0; 1; 2 |]
+        let! s = foreach(r, fun v -> flow {
+            let! u = inc v
+            let! r2 = range u
+            let! s2 = foreach(r2, fun w -> flow {
+                return! sum (collect[|  w; v; n |])  // <== "v", "n"
+            })
+            let! z = sum s2
+            return! add z n // <== "n"
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(57, run w, "Sum")
+    
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Closure in a scatter body, delayed closed value producer``() =
+    let mkv_delay = decl (fun (delay:int) -> System.Threading.Thread.Sleep(delay); 5) "mkv_delay" |> arg "value" |> result1 "out"
+
+    let w = flow {
+        let! n = mkv_delay (value 500)
+        let! r = makeValue [| 0; 1; 2 |]
+        let! s = foreach(r, fun v -> flow {
+            return! add v n
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(18, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Closure in a scatter body, delayed array producer``() =
+    let mkv_delay = decl(fun (delay:int) -> System.Threading.Thread.Sleep(delay); [| 0; 1; 2 |]) "mkv_delay" |> arg "value" |> result1 "out"
+
+    let w = flow {
+        let! n = makeValue 5
+        let! r = mkv_delay (value 500)
+        let! s = foreach(r, fun v -> flow {
+            return! add v n
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(18, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Adding two arrays using foreach2``() =
+    let w = flow {
+        let! a = makeValue [| 1; 2; 4 |]
+        let! b = makeValue [| 3; 1; 5 |]
+
+        let! s = foreach2(a, b, fun (a,b) -> flow {
+            let! sum = add a b
+            return sum
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(16, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Adding three arrays using foreach3``() =
+    let w = flow {
+        let! aa = makeValue [| 1; 2; 4 |]
+        let! bb = makeValue [| 3; 1; 5 |]
+        let! cc = makeValue [| 4; 3; 2 |]
+
+        let! s = foreach3(aa, bb, cc, fun (a,b,c) -> flow {
+            let! sum = add a b
+            return! add sum c
+        })
+        return! sum s // [8;6;11]
+    }
+
+    Assert.AreEqual(25, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Adding three collected arrays using foreach3``() =
+    let w = flow {
+        let! nums = [| for i = 0 to 5 do yield makeValue i |]
+        let aa = collect [| nums.[1]; nums.[2]; nums.[4] |]
+        let bb = collect [| nums.[3]; nums.[1]; nums.[5] |]
+        let cc = collect [| nums.[4]; nums.[3]; nums.[2] |]
+
+        let! s = foreach3(aa, bb, cc, fun (a,b,c) -> flow {
+            let! sum = add a b
+            return! add sum c
+        })
+        return! sum s // [8;6;11]
+    }
+
+    Assert.AreEqual(25, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Nested foreach3``() =
+    let w = flow {
+        let! aa = makeValue [| 1; 2 |]
+        let! bb = makeValue [| 3; 1 |]
+        let! cc = makeValue [| 4; 3 |]
+
+        let! s = foreach3(aa, bb, cc, fun (a,b,c) -> flow {
+            let! s2 = foreach3(aa, bb, cc, fun (a',b',c') -> flow {
+                let! suma = add a a'
+                let! sumb = add b b'
+                let! sumc = add c c'
+                return! sum (collect [|suma; sumb; sumc|])
+            })
+            return! sum s2
+        })
+        return! sum s 
+    }
+
+    Assert.AreEqual(56, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Nested foreach3 with collections``() =
+    let w = flow {
+        let! nums = [| for i = 0 to 5 do yield makeValue i |]
+        let aa = collect [| nums.[1]; nums.[2] |]
+        let bb = collect [| nums.[3]; nums.[1] |]
+        let cc = collect [| nums.[4]; nums.[3] |]
+
+        let! s = foreach3(aa, bb, cc, fun (a,b,c) -> flow {
+            let! s2 = foreach3(aa, bb, cc, fun (a',b',c') -> flow {
+                let! suma = add a a'
+                let! sumb = add b b'
+                let! sumc = add c c'
+                return! sum (collect [|suma; sumb; sumc|])
+            })
+            return! sum s2
+        })
+        return! sum s 
+    }
+
+    Assert.AreEqual(56, run w, "Sum")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Adding two arrays of different length``() =
+    let w = flow {
+        let! a = makeValue [| 1; 2; 4 |]
+        let! b = makeValue [| 3; 1 |]
+
+        let! s = foreach2(a, b, fun (a,b) -> flow {
+            let! sum = add a b
+            return sum
+        })
+        return! sum s
+    }
+
+    Assert.Inconclusive("Not implemented: Control.run must fail if the state is not final and cannot evolve anymore")
+    let s = run w
+    Assert.Fail("work succeeded")
+
+[<Test; Category("CI")>]
+[<Timeout(3000)>]
+let ``Nested foreach``() =
+    let w = flow {
+        let! a = makeValue [| 1; 2; 4 |]
+        let! b = makeValue [| 3; 1 |]
+
+        let! s = foreach(a, fun a -> flow {
+            let! s1 = foreach(b, fun b -> flow {
+                let! s2 = add a b
+                return s2
+            })
+            return! sum s1
+        })
+        return! sum s
+    }
+
+    Assert.AreEqual(26, run w)
