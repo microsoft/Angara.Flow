@@ -5,17 +5,14 @@ open Angara.Execution
 open System.Diagnostics.Contracts
 
 
-[<ReflectedDefinition>]
 type InputContract = 
     { Type : Type 
       Name : string }
 
-[<ReflectedDefinition>]
 type OutputContract = 
     { Type : Type
       Name : string }
 
-[<ReflectedDefinition>]
 [<System.Diagnostics.DebuggerDisplay("Contract {Id} {DisplayName}")>]
 type MethodContract = 
     { Id : string
@@ -33,12 +30,14 @@ type Method(id: MethodId, contract: MethodContract) =
 
     member x.Contract = contract
 
-
+    
+[<System.Diagnostics.DebuggerDisplay("Method {Contract.Id} {Id}")>]
 type FunctionMethod(id: MethodId, contract: MethodContract, func: Artefact list * MethodCheckpoint option -> (Artefact list * MethodCheckpoint) seq) =
     inherit Method(id, contract)
 
     override x.Execute (inputs: Artefact list, chk: MethodCheckpoint option) : (Artefact list * MethodCheckpoint) seq =
-        func(inputs, chk) 
+        let result = func(inputs, chk) |> Seq.toArray
+        result |> Seq.ofArray
 
 module BasicMethods =
     let value_ContractId = "value_"

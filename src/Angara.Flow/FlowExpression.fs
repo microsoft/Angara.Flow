@@ -236,7 +236,7 @@ module FlowExpression =
                     ; Description = "Allows explicit representation of an artefact produced by a scatter method"
                     ; Inputs = [{InputContract.Type = t; InputContract.Name = "scattered array" }]
                     ; Outputs = [{OutputContract.Type = t; OutputContract.Name = "item" }] },
-                    fun (args, _) ->  Seq.singleton ([args], null))
+                    fun (inps, _) ->  Seq.singleton (inps, null))
 
         let createId<'a>() = createIdUntyped typeof<'a>
 

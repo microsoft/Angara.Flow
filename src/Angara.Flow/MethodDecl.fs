@@ -65,7 +65,9 @@ let private makeAny
             let a_inputs = [for i in 0..(List.length inputs - 1) -> LE.Convert(LE.ArrayAccess(p_inputs,LE.Constant(i)),inputs.[i].Type) :> LE]                                        
             let call = LE.Call(LE.Constant(compute),invoke,a_inputs)
             let bf : Func<obj[], 'compute_result> = LE.Lambda<Func<obj[], 'compute_result>>(call, p_inputs).Compile()
-            let smplFun = fun (margs,_:Execution.MethodCheckpoint option) -> Seq.singleton (bf.Invoke(margs |> List.toArray) |> unwrap_outputs |> Array.toList, null)
+            let smplFun = fun (margs,_:Execution.MethodCheckpoint option) -> 
+                let res = bf.Invoke(margs |> List.toArray) |> unwrap_outputs
+                seq{ yield res |> Array.toList, null }
             smplFun
 
 
