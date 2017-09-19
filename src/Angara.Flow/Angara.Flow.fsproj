@@ -62,8 +62,8 @@
     <Compile Include="Execution.fsi" />
     <Compile Include="Execution.fs" />
     <Compile Include="Contract.fs" />
+    <Compile Include="FlowExpression.fsi" />
     <Compile Include="FlowExpression.fs" />
-    <Compile Include="MethodDecl.fs" />
     <None Include="Flow.fsi" />
     <None Include="Flow.fs" />
     <None Include="Methods.fsi" />

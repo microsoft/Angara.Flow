@@ -79,7 +79,7 @@ let ``Increment an integer number``() =
     let s = build f
     Assert.AreEqual(2, s.Graph.Structure.Vertices.Count, "Number of methods")
 
-    let y = run f
+    let y = run1 f
     Assert.AreEqual(4, y, "Incremented value")
 
 
@@ -98,7 +98,7 @@ let ``Iterative method with multiple outputs``() =
         return r
     }
 
-    Assert.AreEqual(3, run f)
+    Assert.AreEqual(3, run1 f)
 
  
 [<Test; Category("CI")>]
@@ -115,7 +115,7 @@ let ``Array of flows to array of artefacts``() =
         return s
     }
 
-    Assert.AreEqual(9, run f)
+    Assert.AreEqual(9, run1 f)
 
 
 
@@ -140,7 +140,7 @@ let ``Inline constants in "return"``() =
         return! add (value 1) (value 2)
     } 
 
-    Assert.AreEqual(3, run g)
+    Assert.AreEqual(3, run1 g)
         
     let s = build g
     Assert.AreEqual(3, s.Graph.Structure.Vertices.Count, "Number of methods")
@@ -168,7 +168,7 @@ let ``Inline constants in computation expressions``() =
 
 [<Test; Category("CI")>]
 [<Timeout(2000)>]
-let ``Build and run a flow using 'flow' expression``() =
+let ``Build and run1 a flow using 'flow' expression``() =
     let g = flow {
         let! x = makeValue 3
         let! y = inc x
@@ -176,7 +176,7 @@ let ``Build and run a flow using 'flow' expression``() =
         return z
     } 
         
-    Assert.AreEqual(7, run g)
+    Assert.AreEqual(7, run1 g)
 
 [<Test; Category("CI")>]
 [<Timeout(2000)>]
@@ -189,7 +189,7 @@ let ``Get an exception occured during execution``() =
     } 
 
     try    
-        let _ = run g
+        let _ = run1 g
         Assert.Fail "Flow must fail"
     with 
         | :? Control.FlowFailedException as e when e.InnerExceptions.Count = 1 ->
@@ -240,7 +240,7 @@ let ``Use iterative method in a 'work' monad``() =
         return! incf min
     } 
 
-    Assert.AreEqual(4.0/3.0, run g, 0.001, "Value must be about 4/3")
+    Assert.AreEqual(4.0/3.0, run1 g, 0.001, "Value must be about 4/3")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -250,7 +250,7 @@ let ``Vector operation in a work expression``() =
         return! sum s
     }
 
-    Assert.AreEqual(6, run w, "Sum")
+    Assert.AreEqual(6, run1 w, "Sum")
 
 
 [<Test; Category("CI")>]
@@ -267,7 +267,7 @@ let ``Nested vector operation in a work expression``() =
         return! sum s
     }
 
-    Assert.AreEqual(10, run w, "Sum")
+    Assert.AreEqual(10, run1 w, "Sum")
     
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -280,7 +280,7 @@ let ``Closure in a scatter body``() =
         return! sum s
     }
 
-    Assert.AreEqual(18, run w, "Sum")
+    Assert.AreEqual(18, run1 w, "Sum")
 
 
 [<Test; Category("CI")>]
@@ -293,7 +293,7 @@ let ``Scatter collected array``() =
         return! sum s
     }
 
-    Assert.AreEqual(5, run w, "Sum")
+    Assert.AreEqual(5, run1 w, "Sum")
 
 
 [<Test; Category("CI")>]
@@ -314,7 +314,7 @@ let ``Closure in a nested scatter body``() =
         return! sum s
     }
 
-    Assert.AreEqual(57, run w, "Sum")
+    Assert.AreEqual(57, run1 w, "Sum")
 
 
 [<Test; Category("CI")>]
@@ -332,7 +332,7 @@ let ``Double scatter of 2d-array``() =
         return! sum s
     }
 
-    Assert.AreEqual(10, run w, "Sum")
+    Assert.AreEqual(10, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -352,7 +352,7 @@ let ``Triple scatter of 3d-array``() =
         return! sum s
     }
 
-    Assert.AreEqual(21, run w, "Sum")
+    Assert.AreEqual(21, run1 w, "Sum")
 
 
 [<Test; Category("CI")>]
@@ -366,7 +366,7 @@ let ``Collecting scattered value``() =
         return! sum s
     }
 
-    Assert.AreEqual(6, run w, "Sum")
+    Assert.AreEqual(6, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -378,7 +378,7 @@ let ``Returning scattered value``() =
         return! sum s
     }
 
-    Assert.AreEqual(3, run w, "Sum")
+    Assert.AreEqual(3, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -393,7 +393,7 @@ let ``Scattering collected scattered value``() =
         return! sum s
     }
 
-    Assert.AreEqual(12, run w, "Sum")
+    Assert.AreEqual(12, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -406,7 +406,7 @@ let ``Scatter body doesn't depend on scattered artefact``() =
         return! sum s
     }
     
-    Assert.AreEqual(18, run w, "Sum")
+    Assert.AreEqual(18, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -418,7 +418,7 @@ let ``Scatter body doesn't depend on scattered artefact and has no inputs``() =
         return s
     }
     
-    Assert.AreEqual([|3;3;3|], run w, "Sum")
+    Assert.AreEqual([|3;3;3|], run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -438,7 +438,7 @@ let ``Closure in a nested scatter body using 'collect'``() =
         return! sum s
     }
 
-    Assert.AreEqual(57, run w, "Sum")
+    Assert.AreEqual(57, run1 w, "Sum")
     
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -454,7 +454,7 @@ let ``Closure in a scatter body, delayed closed value producer``() =
         return! sum s
     }
 
-    Assert.AreEqual(18, run w, "Sum")
+    Assert.AreEqual(18, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -470,7 +470,7 @@ let ``Closure in a scatter body, delayed array producer``() =
         return! sum s
     }
 
-    Assert.AreEqual(18, run w, "Sum")
+    Assert.AreEqual(18, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -486,7 +486,7 @@ let ``Adding two arrays using foreach2``() =
         return! sum s
     }
 
-    Assert.AreEqual(16, run w, "Sum")
+    Assert.AreEqual(16, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -503,7 +503,7 @@ let ``Adding three arrays using foreach3``() =
         return! sum s // [8;6;11]
     }
 
-    Assert.AreEqual(25, run w, "Sum")
+    Assert.AreEqual(25, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -521,7 +521,7 @@ let ``Adding three collected arrays using foreach3``() =
         return! sum s // [8;6;11]
     }
 
-    Assert.AreEqual(25, run w, "Sum")
+    Assert.AreEqual(25, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -543,7 +543,7 @@ let ``Nested foreach3``() =
         return! sum s 
     }
 
-    Assert.AreEqual(56, run w, "Sum")
+    Assert.AreEqual(56, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -566,7 +566,7 @@ let ``Nested foreach3 with collections``() =
         return! sum s 
     }
 
-    Assert.AreEqual(56, run w, "Sum")
+    Assert.AreEqual(56, run1 w, "Sum")
 
 [<Test; Category("CI")>]
 [<Timeout(3000)>]
@@ -582,8 +582,8 @@ let ``Adding two arrays of different length``() =
         return! sum s
     }
 
-    Assert.Inconclusive("Not implemented: Control.run must fail if the state is not final and cannot evolve anymore")
-    let s = run w
+    Assert.Inconclusive("Not implemented: Control.run1 must fail if the state is not final and cannot evolve anymore")
+    let s = run1 w
     Assert.Fail("work succeeded")
 
 [<Test; Category("CI")>]
@@ -603,4 +603,4 @@ let ``Nested foreach``() =
         return! sum s
     }
 
-    Assert.AreEqual(26, run w)
+    Assert.AreEqual(26, run1 w)

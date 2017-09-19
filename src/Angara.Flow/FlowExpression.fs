@@ -89,8 +89,23 @@ module FlowExpression =
         { Methods = methods
         ; Results = results
         ; Scopes  = List.empty }
+    
+    open Angara.States
+    open Angara.Execution
 
 
+    /// Takes any value and generates a work expression that evaluates to this value.
+    let makeValue<'a> (v:'a) : FlowExpression<ArtefactExpression<'a>> =  
+        let me = MethodExpression(BasicMethods.createMakeValue v, [])
+        define([me], [|Single({ MethodExpr = me; Index = 0 })|])
+
+    /// Converts any value into an artefact without binding it to an identifier.
+    let value (v:'a) : ArtefactExpression<'a>  = 
+        let me = MethodExpression(BasicMethods.createMakeValue v, [])
+        let a:ArtefactExpression<'a> = A(Single({ MethodExpr = me; Index = 0}))
+        a
+
+    [<Sealed>]
     type FlowExpressionBuilder() =
         let inpm = function | Single output -> [output.MethodExpr] 
                             | Collection outputs-> outputs |> List.map(fun o -> o.MethodExpr)
@@ -192,6 +207,7 @@ module FlowExpression =
         member x.Return(target:ArtefactExpression<'a>) : FlowExpression<ArtefactExpression<'a>> = 
             flowFromResults(target)
 
+
         member x.Return(_:unit) = define([], [||]) : FlowExpression<unit>
 
         member x.Return() = define([], [||]) : FlowExpression<unit>
@@ -207,21 +223,6 @@ module FlowExpression =
     /// Builds a strongly typed dependency graph from Angara methods using computation expression syntax.
     let flow = FlowExpressionBuilder()
 
-   
-    open Angara.States
-    open Angara.Execution
-
-
-    /// Takes any value and generates a work expression that evaluates to this value.
-    let makeValue<'a> (v:'a) : FlowExpression<ArtefactExpression<'a>> =  
-        let me = MethodExpression(BasicMethods.createMakeValue v, [])
-        define([me], [|Single({ MethodExpr = me; Index = 0 })|])
-
-    /// Converts any value into an artefact without binding it to an identifier.
-    let value (v:'a) : ArtefactExpression<'a>  = 
-        let me = MethodExpression(BasicMethods.createMakeValue v, [])
-        let a:ArtefactExpression<'a> = A(Single({ MethodExpr = me; Index = 0}))
-        a
 
     module SystemMethods =
         let id_ContractId = "id_"
@@ -447,64 +448,64 @@ module FlowExpression =
 
     /// Creates a work which evaluates the given body function for each item of the given vector.
     let rec foreach2(u: ArtefactExpression<'T[]>, v: ArtefactExpression<'S[]>, body: ArtefactExpression<'T> * ArtefactExpression<'S> -> FlowExpression<ArtefactExpression<'U>>) : FlowExpression<ArtefactExpression<'U[]>> =
-            match u.Untyped, v.Untyped with
-            | Single scatterOutputU, Single scatterOutputV ->
-                let originId_u = MethodExpression(SystemMethods.createId<'T>(), [ UntypedArtefactExpression.Single scatterOutputU ])
-                let originId_v = if u.Untyped = v.Untyped then originId_u 
-                                 else MethodExpression(SystemMethods.createId<'S>(), [ UntypedArtefactExpression.Single scatterOutputV ])
+        match u.Untyped, v.Untyped with
+        | Single scatterOutputU, Single scatterOutputV ->
+            let originId_u = MethodExpression(SystemMethods.createId<'T>(), [ UntypedArtefactExpression.Single scatterOutputU ])
+            let originId_v = if u.Untyped = v.Untyped then originId_u 
+                                else MethodExpression(SystemMethods.createId<'S>(), [ UntypedArtefactExpression.Single scatterOutputV ])
 
-                let expr : FlowExpression<ArtefactExpression<'T>*ArtefactExpression<'S>> = 
-                    define([originId_u; originId_v], [|UntypedArtefactExpression.Single { MethodExpr = originId_u; Index = 0 }; UntypedArtefactExpression.Single { MethodExpr = originId_v; Index = 0 }|])
-                let bodyWrk = flow.Bind(expr, body)
-                assert(Array.length bodyWrk.Results = 1)
+            let expr : FlowExpression<ArtefactExpression<'T>*ArtefactExpression<'S>> = 
+                define([originId_u; originId_v], [|UntypedArtefactExpression.Single { MethodExpr = originId_u; Index = 0 }; UntypedArtefactExpression.Single { MethodExpr = originId_v; Index = 0 }|])
+            let bodyWrk = flow.Bind(expr, body)
+            assert(Array.length bodyWrk.Results = 1)
 
-                let bwMethods, bwTarget = ensureTargetInScope [originId_u;originId_v] (bodyWrk.Methods, bodyWrk.Results.[0])
+            let bwMethods, bwTarget = ensureTargetInScope [originId_u;originId_v] (bodyWrk.Methods, bodyWrk.Results.[0])
             
-                let bodyMethods = bodyWrk.Scopes |> Seq.fold (fun mm ss -> 
-                    let mm2 = nestScope<'T> originId_u mm ss in nestScope<'S> originId_v mm2 ss) bwMethods
-                let bodyTarget_s = updateForeachTarget bodyMethods bwTarget
+            let bodyMethods = bodyWrk.Scopes |> Seq.fold (fun mm ss -> 
+                let mm2 = nestScope<'T> originId_u mm ss in nestScope<'S> originId_v mm2 ss) bwMethods
+            let bodyTarget_s = updateForeachTarget bodyMethods bwTarget
 
-                let targetId = MethodExpression(SystemMethods.createId<'U[]>(), [ bodyTarget_s ])
-                { define(bodyMethods@[targetId], [| Single { MethodExpr=targetId; Index=0 } |]) with Scopes = [{ Origin = [originId_u;originId_v]; Scopes = bodyWrk.Scopes }] }
+            let targetId = MethodExpression(SystemMethods.createId<'U[]>(), [ bodyTarget_s ])
+            { define(bodyMethods@[targetId], [| Single { MethodExpr=targetId; Index=0 } |]) with Scopes = [{ Origin = [originId_u;originId_v]; Scopes = bodyWrk.Scopes }] }
 
-            | Collection _, _ ->
-                flow.Bind(SystemMethods.id<'T[]>(u), fun u -> foreach2(u,v, body))
-            | _, Collection _ ->
-                flow.Bind(SystemMethods.id<'S[]>(v), fun v -> foreach2(u,v, body))
+        | Collection _, _ ->
+            flow.Bind(SystemMethods.id<'T[]>(u), fun u -> foreach2(u,v, body))
+        | _, Collection _ ->
+            flow.Bind(SystemMethods.id<'S[]>(v), fun v -> foreach2(u,v, body))
 
-        /// Creates a work which evaluates the given body function for each item of the given vector.
+    /// Creates a work which evaluates the given body function for each item of the given vector.
     let rec foreach3(u: ArtefactExpression<'T[]>, v: ArtefactExpression<'S[]>, w: ArtefactExpression<'R[]>, body: ArtefactExpression<'T> * ArtefactExpression<'S> * ArtefactExpression<'R> -> FlowExpression<ArtefactExpression<'U>>) : FlowExpression<ArtefactExpression<'U[]>> =
-            match u.Untyped, v.Untyped, w.Untyped with
-            | Single scatterOutputU, Single scatterOutputV, Single scatterOutputW ->
-                let originId_u = MethodExpression(SystemMethods.createId<'T>(), [ UntypedArtefactExpression.Single scatterOutputU ])
-                let originId_v = if u.Untyped = v.Untyped then originId_u 
-                                 else MethodExpression(SystemMethods.createId<'S>(), [ UntypedArtefactExpression.Single scatterOutputV ])
-                let originId_w = if u.Untyped = w.Untyped then originId_u 
-                                 else if v.Untyped = w.Untyped then originId_v 
-                                 else MethodExpression(SystemMethods.createId<'R>(), [ UntypedArtefactExpression.Single scatterOutputW ])
+        match u.Untyped, v.Untyped, w.Untyped with
+        | Single scatterOutputU, Single scatterOutputV, Single scatterOutputW ->
+            let originId_u = MethodExpression(SystemMethods.createId<'T>(), [ UntypedArtefactExpression.Single scatterOutputU ])
+            let originId_v = if u.Untyped = v.Untyped then originId_u 
+                                else MethodExpression(SystemMethods.createId<'S>(), [ UntypedArtefactExpression.Single scatterOutputV ])
+            let originId_w = if u.Untyped = w.Untyped then originId_u 
+                                else if v.Untyped = w.Untyped then originId_v 
+                                else MethodExpression(SystemMethods.createId<'R>(), [ UntypedArtefactExpression.Single scatterOutputW ])
 
-                let expr : FlowExpression<ArtefactExpression<'T>*ArtefactExpression<'S>*ArtefactExpression<'R>> = 
-                    define([originId_u; originId_v; originId_w], [|UntypedArtefactExpression.Single { MethodExpr = originId_u; Index = 0 }; UntypedArtefactExpression.Single { MethodExpr = originId_v; Index = 0 }; UntypedArtefactExpression.Single { MethodExpr = originId_w; Index = 0 }|])
-                let bodyWrk = flow.Bind(expr, body)
-                assert(Array.length bodyWrk.Results = 1)
+            let expr : FlowExpression<ArtefactExpression<'T>*ArtefactExpression<'S>*ArtefactExpression<'R>> = 
+                define([originId_u; originId_v; originId_w], [|UntypedArtefactExpression.Single { MethodExpr = originId_u; Index = 0 }; UntypedArtefactExpression.Single { MethodExpr = originId_v; Index = 0 }; UntypedArtefactExpression.Single { MethodExpr = originId_w; Index = 0 }|])
+            let bodyWrk = flow.Bind(expr, body)
+            assert(Array.length bodyWrk.Results = 1)
 
-                let bwMethods, bwTarget = ensureTargetInScope [originId_u;originId_v;originId_w] (bodyWrk.Methods, bodyWrk.Results.[0])
+            let bwMethods, bwTarget = ensureTargetInScope [originId_u;originId_v;originId_w] (bodyWrk.Methods, bodyWrk.Results.[0])
             
-                let bodyMethods = bodyWrk.Scopes |> Seq.fold (fun mm ss -> 
-                    let mm2 = nestScope<'T> originId_u mm ss 
-                    let mm3 = nestScope<'S> originId_v mm2 ss
-                    nestScope<'R> originId_w mm3 ss) bwMethods
-                let bodyTarget_s = updateForeachTarget bodyMethods bwTarget
+            let bodyMethods = bodyWrk.Scopes |> Seq.fold (fun mm ss -> 
+                let mm2 = nestScope<'T> originId_u mm ss 
+                let mm3 = nestScope<'S> originId_v mm2 ss
+                nestScope<'R> originId_w mm3 ss) bwMethods
+            let bodyTarget_s = updateForeachTarget bodyMethods bwTarget
 
-                let targetId = MethodExpression(SystemMethods.createId<'U[]>(), [ bodyTarget_s ])
-                { define(bodyMethods@[targetId], [| Single { MethodExpr=targetId; Index=0 } |]) with Scopes = [{ Origin = [originId_u;originId_v;originId_w]; Scopes = bodyWrk.Scopes }] }
+            let targetId = MethodExpression(SystemMethods.createId<'U[]>(), [ bodyTarget_s ])
+            { define(bodyMethods@[targetId], [| Single { MethodExpr=targetId; Index=0 } |]) with Scopes = [{ Origin = [originId_u;originId_v;originId_w]; Scopes = bodyWrk.Scopes }] }
 
-            | Collection _, _, _ ->
-                flow.Bind(SystemMethods.id<'T[]>(u), fun u -> foreach3(u,v,w, body))
-            | _, Collection _, _ ->
-                flow.Bind(SystemMethods.id<'S[]>(v), fun v -> foreach3(u,v,w, body))
-            | _, _, Collection _ ->
-                flow.Bind(SystemMethods.id<'R[]>(w), fun w -> foreach3(u,v,w, body))
+        | Collection _, _, _ ->
+            flow.Bind(SystemMethods.id<'T[]>(u), fun u -> foreach3(u,v,w, body))
+        | _, Collection _, _ ->
+            flow.Bind(SystemMethods.id<'S[]>(v), fun v -> foreach3(u,v,w, body))
+        | _, _, Collection _ ->
+            flow.Bind(SystemMethods.id<'R[]>(w), fun w -> foreach3(u,v,w, body))
 
     type internal build_x_state = 
         { 
@@ -642,7 +643,7 @@ module FlowExpression =
                 | Collection _ -> failwith "Cannot evaluate a collection of artefacts"
         f.Results |> Array.map find
 
-    let run (def:FlowExpression<ArtefactExpression<'result>>) : 'result = 
+    let run1 (def:FlowExpression<ArtefactExpression<'result>>) : 'result = 
         assert(1 = def.Results.Length)
 
         let initial = build def
@@ -673,3 +674,212 @@ module FlowExpression =
         let b = final |> Control.outputScalar m.[1] 
         let c = final |> Control.outputScalar m.[2] 
         a,b,c
+
+    let run4 (def:FlowExpression<ArtefactExpression<'a>*ArtefactExpression<'b>*ArtefactExpression<'c>*ArtefactExpression<'d>>) : 'a*'b*'c*'d = 
+        assert(4 = def.Results.Length)
+
+        let initial = build def
+        let final = Control.runToFinal initial
+
+        let m = findResultMethods def final.Graph         
+        let a = final |> Control.outputScalar m.[0] 
+        let b = final |> Control.outputScalar m.[1] 
+        let c = final |> Control.outputScalar m.[2] 
+        let d = final |> Control.outputScalar m.[3] 
+        a,b,c,d
+
+module MethodDecl =
+
+    open System
+
+    type LE = System.Linq.Expressions.Expression
+
+    /// data necessary to generate a primitive flow expression
+    type FEData = {factory:Guid->Method; args:UntypedArtefactExpression list} // collected list of arguments from 
+
+    /// the final stage of generation of a primitive flow expression given the collected flow expression data 
+    let private methd {factory=factory; args=arglist} =
+        let m = MethodExpression(factory(Guid.NewGuid()), List.rev arglist) 
+        define([m], [|for i in 0..List.length m.Method.Contract.Outputs - 1 -> UntypedArtefactExpression.Single{MethodExpr=m; Index=i}|])
+
+    type BehaviourTag = SimpleBehaviour | IterativeBehaviour | ResumableBehaviour | CompoundBehaviour
+
+    /// The collected data for creating a contract with make* functions
+    type ContractData<'compute,     // a type of the original function to be wrapped, e.g. 'a -> 'b -> 'c
+                      'reduced,     // intermediate type of the original function stripped out of arguments, e.g. 'b -> 'c
+                      'statearg,    // type-check for the first argument of a resumable function
+                      'flow,        // intermediate type of a corresponding generator stripped out of arguments, e.g. ArtefactExpression<'b> -> FlowDef<ArtefactExpression<'c>>
+                      'generator    // the inferred type of the corresponding generator, e.g. ArtefactExpression<'a> -> ArtefactExpression<'b> -> FlowDef<ArtefactExpression<'c>>
+                      > = 
+        CData of
+            'compute // the F# function to be wrapped
+             * Type list // List of type arguments for this instance of contract
+             * string // contract id
+             * BehaviourTag
+             * InputContract list  // inputs
+             * Execution.MethodId list       // lambdas
+             * ((FEData -> 'flow) -> FEData -> 'generator) // factory of the primitive flow expression generator
+
+    /// Creates a pair of a contract and a primitive flow expression given the collected ContractData
+    let private makeAny 
+                    (CData(compute, typeArgs, methodId, behaviour, rev_inputs, _, factory): ContractData<_,'compute_result,'compute_result,_,_>)
+                    (outputs: OutputContract list)
+                    (unwrap_outputs: 'compute_result -> Execution.Artefact[])
+                    (wrap_outputs: Execution.Artefact[] -> 'compute_result) = 
+                    
+        let inputs = List.rev rev_inputs
+
+        let contract : MethodContract =  
+            {
+                Id=methodId
+                TypeArgs=typeArgs
+                DisplayName=methodId 
+                Description=""
+                Inputs = inputs
+                Outputs = outputs
+            }
+
+        let mfunc : Execution.Artefact list * Execution.MethodCheckpoint option -> (Execution.Artefact list * Execution.MethodCheckpoint) seq =
+            match behaviour with
+            | SimpleBehaviour ->
+                let fsharpfunc = compute.GetType()
+                let invoke = fsharpfunc.GetMethods() |> Array.find ( fun mi ->
+                    (mi.ReturnType = typeof<'compute_result>) &&
+                        (let pp = mi.GetParameters()
+                        (pp.Length = inputs.Length) && 
+                        (Seq.forall2 (fun (p:System.Reflection.ParameterInfo) (i:InputContract) -> 
+                            p.ParameterType = i.Type) pp inputs))
+                    )
+                let p_inputs = LE.Parameter(typeof<obj[]>)                                        
+                let a_inputs = [for i in 0..(List.length inputs - 1) -> LE.Convert(LE.ArrayAccess(p_inputs,LE.Constant(i)),inputs.[i].Type) :> LE]                                        
+                let call = LE.Call(LE.Constant(compute),invoke,a_inputs)
+                let bf : Func<obj[], 'compute_result> = LE.Lambda<Func<obj[], 'compute_result>>(call, p_inputs).Compile()
+                let smplFun = fun (margs,_:Execution.MethodCheckpoint option) -> 
+                    let res = bf.Invoke(margs |> List.toArray) |> unwrap_outputs
+                    seq{ yield res |> Array.toList, null }
+                smplFun
+
+
+            | IterativeBehaviour ->
+                let fsharpfunc = compute.GetType()
+                let invoke = fsharpfunc.GetMethods() |> Array.find ( fun mi ->
+                    (mi.ReturnType = typeof<'compute_result seq>) &&
+                        (let pp = mi.GetParameters()
+                        (pp.Length = inputs.Length) && 
+                        (Seq.forall2 (fun (p:System.Reflection.ParameterInfo) (i:InputContract) -> 
+                            p.ParameterType = i.Type) pp inputs))
+                    )
+                let p_inputs = LE.Parameter(typeof<obj[]>)                                        
+                let a_inputs = [for i in 0..(List.length inputs - 1) -> LE.Convert(LE.ArrayAccess(p_inputs,LE.Constant(i)),inputs.[i].Type) :> LE]                                        
+                let call = LE.Call(LE.Constant(compute),invoke,a_inputs)
+                let bf = LE.Lambda<System.Func<obj[], 'compute_result seq>>(call, p_inputs).Compile()
+                let iterFun = fun (margs,_:Execution.MethodCheckpoint option) -> bf.Invoke(margs |> List.toArray) |> Seq.map(fun art -> art |> unwrap_outputs |> Array.toList, null)
+                iterFun
+
+            //| ResumableBehaviour ->
+            //    let fsharpfunc = compute.GetType()
+            //    let invoke = fsharpfunc.GetMethods() |> Array.find ( fun mi ->
+            //        (mi.ReturnType = typeof<'compute_result seq>) &&
+            //            (let pp = mi.GetParameters()
+            //            (pp.Length = inputs.Length+1) && 
+            //            (Seq.forall2 (fun (p:System.Reflection.ParameterInfo) (i:InputContract) -> 
+            //                p.ParameterType = i.Type) (pp |> Seq.skip 1) inputs))
+            //        )
+            //    let s_input = LE.Parameter(typeof<'compute_result option>)                                        
+            //    let p_inputs = LE.Parameter(typeof<obj[]>)                                        
+            //    let a_inputs = (s_input:>LE)::[for i in 0..(List.length inputs - 1) -> LE.Convert(LE.ArrayAccess(p_inputs,LE.Constant(i)),inputs.[i].Type) :> LE]                                        
+            //    let call = LE.Call(LE.Constant(compute),invoke,a_inputs)
+            //    let bf = LE.Lambda<System.Func<'compute_result option, obj[], 'compute_result seq>>(call, s_input, p_inputs).Compile()
+            //    Angara.Execution.Behavior.ResumableIterativeFunction(fun (argstate,margs) ->
+            //        bf.Invoke(
+            //                argstate |> Option.map wrap_outputs,
+            //                margs) |> Seq.map unwrap_outputs)
+            | CompoundBehaviour 
+            | _ ->
+                failwith "not implemented"
+
+        factory methd {factory = (fun id -> upcast FunctionMethod(id, contract, mfunc)); args = []}
+
+    /// Declare a simple method producing one output with a given 'method id'. The 'method id' is by convention a unique combination of two words.
+    let result1
+        out1
+        (data: ContractData<_,'a,'a,FlowExpression<ArtefactExpression<'a>>,_>) =
+
+        makeAny data [
+                    ({Name=out1; Type=typeof<'a>}:OutputContract)
+                    ] (fun a -> [|a:>obj|]) (function ([|a|] : Execution.Artefact[]) -> (a:?>'a) | _ -> failwith "Internal runtime error")
+
+    /// Create a compound method producing two outputs with a given 'method id'. The 'method id' is by convention a unique combination of two words.
+    let result2 
+        (out1,out2) 
+        (data: ContractData<_,'a*'b,'a*'b,FlowExpression<ArtefactExpression<'a>*ArtefactExpression<'b>>,_>) =
+
+        makeAny data [
+                    ({Name=out1; Type=typeof<'a>}:OutputContract)
+                    ({Name=out2; Type=typeof<'b>}:OutputContract)
+                    ] (fun (a,b) -> [|a:>obj; b:>obj|]) (function ([|a; b|] : Execution.Artefact[]) -> (a:?>'a,b:?>'b) | _ -> failwith "Internal runtime error")
+
+
+    /// Create a compound method producing three outputs with a given 'method id'. The 'method id' is by convention a unique combination of two words.
+    let result3 
+        (out1,out2,out3) 
+        (data: ContractData<_,'a*'b*'c,'a*'b*'c,FlowExpression<ArtefactExpression<'a>*ArtefactExpression<'b>*ArtefactExpression<'c>>,_>) =
+
+        makeAny data [
+                    ({Name=out1; Type=typeof<'a>}:OutputContract)
+                    ({Name=out2; Type=typeof<'b>}:OutputContract)
+                    ({Name=out3; Type=typeof<'c>}:OutputContract)
+                    ] (fun (a,b,c) -> [|a:>obj; b:>obj; c:>obj|]) (function ([|a; b; c|] : Execution.Artefact[]) -> (a:?>'a,b:?>'b,c:?>'c) | _ -> failwith "Internal runtime error")
+
+    /// Create a compound method producing three outputs with a given 'method id'. The 'method id' is by convention a unique combination of two words.
+    let result4 
+        (out1,out2,out3,out4) 
+        (data: ContractData<_,'a*'b*'c*'d,'a*'b*'c*'d,FlowExpression<ArtefactExpression<'a>*ArtefactExpression<'b>*ArtefactExpression<'c>*ArtefactExpression<'d>>,_>) =
+
+        makeAny data [
+                    ({Name=out1; Type=typeof<'a>}:OutputContract)
+                    ({Name=out2; Type=typeof<'b>}:OutputContract)
+                    ({Name=out3; Type=typeof<'c>}:OutputContract)
+                    ({Name=out4; Type=typeof<'d>}:OutputContract)
+                    ] (fun (a,b,c,d) -> [|a:>obj; b:>obj; c:>obj; d:>obj|]) (function ([|a; b; c; d|] : Execution.Artefact[]) -> (a:?>'a,b:?>'b,c:?>'c,d:?>'d) | _ -> failwith "Internal runtime error")
+
+
+    /// Begin new method declaration.
+    /// Creates the ContractData value that contains the method implementation function and the method id,
+    /// but no information about the method arguments.
+    let decl (compute:'c) methodId : ContractData<'c,'c,'statearg,'generator,'generator> =
+        CData(compute, [], methodId, SimpleBehaviour, [], [], fun x -> x)
+        // in a full declaration x:'generator will be inferred as, e.g. ArtefactExpression<'a> -> ArtefactExpression<b> -> FlowDef<ArtefactExpression<c>>
+
+    /// Begin new method declaration.
+    /// Creates the ContractData value that contains the method implementation function and the method id,
+    /// but no information about the method arguments.
+    let gdecl (compute:'c) (typeArgs: System.Type list) methodId : ContractData<'c,'c,'statearg,'generator,'generator> =
+        CData(compute, typeArgs, methodId, SimpleBehaviour, [], [], fun x -> x)
+
+
+    /// Add information about a method argument to ContractData value.
+    let arg 
+        (name:string) 
+        (CData(compute, typeArgs, methodId, behaviour, inputs, lambdas, factory):ContractData<'compute,'arg->'reduced,'statearg, ArtefactExpression<'arg>->'rest, 'generator>) 
+        : ContractData<'compute,'reduced,'statearg,'rest,'generator> =
+
+        let input:InputContract = {Name=name; Type=typeof<'arg>}
+        let arg_we : (FEData -> 'rest) -> FEData -> ArtefactExpression<'arg> -> 'rest = fun f da arg ->
+                f {da with args=arg.Untyped::da.args}
+        CData(compute, typeArgs, methodId, behaviour, input::inputs, lambdas, arg_we >> factory)
+
+    /// Declares a method as iterative. Must immediately precede a call to 'make'.
+    let iter (CData(compute, typeArgs, methodId, behaviour, inputs, lambdas, factory):ContractData<'compute,'reduced seq,'statearg, 'rest, 'generator>) 
+        : ContractData<'compute,'reduced,'statearg,'rest,'generator> =
+        let behaviour' = match behaviour with SimpleBehaviour -> IterativeBehaviour | _ -> behaviour
+        CData(compute, typeArgs, methodId, behaviour', inputs, lambdas, factory)
+
+    /// Decalres a method as resumable.
+    /// The first argument of the method implementation must be an option of the method result type.
+    /// This function must precede all calls to 'arg'.
+    let statearg 
+        (CData(compute, typeArgs, methodId, behaviour, inputs, lambdas, factory):ContractData<'ret option->'reduced,'ret option->'reduced, 'ret, 'rest, 'generator>) 
+        : ContractData<'ret option->'reduced,'reduced,'ret,'rest,'generator> =
+        CData(compute, typeArgs, methodId, ResumableBehaviour, inputs, lambdas, factory)
+
