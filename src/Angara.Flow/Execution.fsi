@@ -71,12 +71,12 @@ type MethodOutput =
 
 /// Runs methods.
 [<AbstractClass>]
-type Scheduler =
-    abstract Start : (unit -> unit) -> unit
+type Scheduler<'m when 'm:>ExecutableMethod and 'm:comparison> =
+    abstract Start : 'm * (unit -> unit) -> unit
     
     /// Creates a scheduler which runs methods in the thread pool and limits concurrency level
     /// depending on number of CPU cores.
-    static member ThreadPool : unit -> Scheduler
+    static member ThreadPool : unit -> Scheduler<'m>
 
 
 /// Represents an engine which maintains a combination of the StateMachine and Runtime.
@@ -84,7 +84,7 @@ type Scheduler =
 /// makes the messages flow from the runtime to the state machine.
 [<Class>]
 type Engine<'m when 'm:>ExecutableMethod and 'm:comparison> =
-    new : State<'m, MethodOutput> * Scheduler -> Engine<'m>
+    new : State<'m, MethodOutput> * Scheduler<'m> -> Engine<'m>
     interface IDisposable
 
     member State : State<'m, MethodOutput>
@@ -96,8 +96,8 @@ type Engine<'m when 'm:>ExecutableMethod and 'm:comparison> =
     member Post : Messages.Message<'m, MethodOutput> -> unit
 
 module Control =
-    open System.Reactive.Linq;
-
+    open System.Reactive.Linq
+    
     /// Asynchronously returns a successful final state of the state updates sequence.
     /// If the state has failed method, throws an exception.
     val pickFinal<'m when 'm:>ExecutableMethod and 'm:comparison> : IObservable<StateUpdate<'m,MethodOutput>> -> Reactive.Subjects.AsyncSubject<State<'m,MethodOutput>>
@@ -107,6 +107,9 @@ module Control =
 
     /// Starts the flow from the given flow state blocking until the final state is reached and then returns that state.
     val runToFinal<'m when 'm:>ExecutableMethod and 'm:comparison> : State<'m,MethodOutput> -> State<'m,MethodOutput>
+
+    /// Starts the flow from the given flow state blocking until the final state is reached and then returns that state.
+    val runToFinalIn<'m when 'm:>ExecutableMethod and 'm:comparison> : Scheduler<'m> -> State<'m,MethodOutput> -> State<'m,MethodOutput>
 
     type FlowFailedException =
         new : exn seq -> FlowFailedException

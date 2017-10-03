@@ -289,19 +289,19 @@ type internal Progress<'v>(v:'v, i:VertexIndex, progressReported : ObservableSou
 
 // TODO: it is the Scheduler who should prepare the RuntimeContext for the target function.
 [<AbstractClass>]
-type Scheduler() =
-    abstract Start : (unit -> unit) -> unit
+type Scheduler<'m when 'm:>ExecutableMethod and 'm:comparison> () =
+    abstract Start : 'm * (unit -> unit) -> unit
 
-    static member ThreadPool() : Scheduler = upcast ThreadPoolScheduler()
+    static member ThreadPool() : Scheduler<'m> = upcast ThreadPoolScheduler<'m>()
         
-and [<Class>] ThreadPoolScheduler() =
-    inherit Scheduler()
+and [<Class>] ThreadPoolScheduler<'m when 'm:>ExecutableMethod and 'm:comparison>() =
+    inherit Scheduler<'m>()
 
     static let scheduler = LimitedConcurrencyLevelTaskScheduler(System.Environment.ProcessorCount)
     static do Trace.Runtime.TraceInformation(sprintf "ThreadPoolScheduler limits concurrency level with %d" scheduler.MaximumConcurrencyLevel)
     static let mutable ExSeq = 0L   
     
-    override x.Start (f: unit -> unit) =
+    override x.Start (_, f: unit -> unit) =
         let id = System.Threading.Interlocked.Increment(&ExSeq)        
         System.Threading.Tasks.Task.Factory.StartNew((fun() ->
             try
@@ -313,7 +313,7 @@ and [<Class>] ThreadPoolScheduler() =
                 raise ex), CancellationToken.None, Tasks.TaskCreationOptions.LongRunning, scheduler) |> ignore
 
 [<Sealed>]
-type Runtime<'m when 'm:>ExecutableMethod and 'm:comparison> (source:IObservable<State<'m,MethodOutput> * RuntimeAction<'m> list>, scheduler : Scheduler) =
+type Runtime<'m when 'm:>ExecutableMethod and 'm:comparison> (source:IObservable<State<'m,MethodOutput> * RuntimeAction<'m> list>, scheduler : Scheduler<'m>) =
     let messages = ObservableSource<Message<'m,MethodOutput>>()
     let cancels = Dictionary<'m*VertexIndex,CancellationTokenSource>()
     let progressReported = ObservableSource<'m*VertexIndex*float>()
@@ -417,14 +417,14 @@ type Runtime<'m when 'm:>ExecutableMethod and 'm:comparison> (source:IObservable
         | Execute (v,slice,time) -> 
             let cts = new CancellationTokenSource()
             let func = buildEvaluation (v,slice,time,state) cts false
-            scheduler.Start func
+            scheduler.Start (v, func)
             cancel (v,slice) cancels
             cancels.Add((v,slice), cts)
 
         | Continue (v,slice,time) -> 
             let cts = new CancellationTokenSource()
             let func = buildEvaluation (v,slice,time,state) cts true
-            scheduler.Start func
+            scheduler.Start (v, func)
             cancel (v,slice) cancels
             cancels.Add((v,slice), cts)
 
@@ -470,7 +470,7 @@ module internal Helpers =
 open Helpers
 
 [<Class>]
-type Engine<'m when 'm:>ExecutableMethod and 'm:comparison>(initialState : State<'m, MethodOutput>, scheduler:Scheduler) =
+type Engine<'m when 'm:>ExecutableMethod and 'm:comparison>(initialState : State<'m, MethodOutput>, scheduler:Scheduler<'m>) =
     
     let messages = ObservableSource()
 
@@ -573,8 +573,11 @@ module Control =
         let output = extractOutput m outRef state
         unbox output
 
-    let runToFinal<'m when 'm:>ExecutableMethod and 'm:comparison>(state:State<'m, MethodOutput>) =
-        use engine = new Engine<'m>(state, Scheduler.ThreadPool())
+    let runToFinalIn<'m when 'm:>ExecutableMethod and 'm:comparison> (scheduler:Scheduler<'m>)  (state:State<'m, MethodOutput>) =
+        use engine = new Engine<'m>(state, scheduler)
         let final = pickFinal engine.Changes   
         engine.Start()
         final.GetResult()
+
+    let runToFinal<'m when 'm:>ExecutableMethod and 'm:comparison> (state:State<'m, MethodOutput>) =
+        runToFinalIn (ThreadPoolScheduler.ThreadPool()) state
