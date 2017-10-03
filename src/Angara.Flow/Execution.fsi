@@ -72,6 +72,8 @@ type MethodOutput =
 /// Runs methods.
 [<AbstractClass>]
 type Scheduler<'m when 'm:>ExecutableMethod and 'm:comparison> =
+    new: unit -> Scheduler<'m>
+
     abstract Start : 'm * (unit -> unit) -> unit
     
     /// Creates a scheduler which runs methods in the thread pool and limits concurrency level
